@@ -4,8 +4,8 @@ import { defineFrontComponent } from 'twenty-sdk/define';
 import { useSelectedRecordIds } from 'twenty-sdk/front-component';
 import { RestApiClient } from 'twenty-client-sdk/rest';
 import { Avatar } from 'twenty-ui/data-display';
-import { IconPlus } from 'twenty-ui/icon';
-import { Button, Checkbox, CheckboxSize, SearchInput } from 'twenty-ui/input';
+import { IconCheck, IconPlus } from 'twenty-ui/icon';
+import { Button, SearchInput } from 'twenty-ui/input';
 import { useTheme } from 'twenty-ui/theme-constants';
 
 import { RELATION_CARDS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
@@ -47,6 +47,8 @@ type PeopleResponse = {
 const PEOPLE_LIMIT = 200;
 const PICKER_RESULT_LIMIT = 20;
 const SEARCH_DEBOUNCE_MS = 300;
+
+const CHECKBOX_SIZE_IN_PX = 16;
 
 const joinNonEmpty = (parts: Array<string | null | undefined>): string =>
   parts
@@ -151,7 +153,8 @@ const RelationCards = () => {
       );
 
       setPeople(response?.data?.people ?? []);
-    } catch {
+    } catch (error) {
+      console.error('relation-cards: failed to load related people', error);
       setErrorMessage('Не удалось загрузить контакты');
     } finally {
       setIsLoading(false);
@@ -171,32 +174,33 @@ const RelationCards = () => {
 
     setIsSearching(true);
 
-    const timer = setTimeout(async () => {
-      try {
-        const filter = buildSearchFilter(searchQuery);
+    const timer = setTimeout(() => {
+      const filter = buildSearchFilter(searchQuery);
 
-        const response = await new RestApiClient().get<PeopleResponse>(
-          '/rest/people',
-          {
-            query: {
-              limit: PICKER_RESULT_LIMIT,
-              ...(filter ? { filter } : {}),
-            },
+      new RestApiClient()
+        .get<PeopleResponse>('/rest/people', {
+          query: {
+            limit: PICKER_RESULT_LIMIT,
+            ...(filter ? { filter } : {}),
           },
-        );
+        })
+        .then((response) => {
+          if (!isCancelled) {
+            setSearchResults(response?.data?.people ?? []);
+          }
+        })
+        .catch((error) => {
+          console.error('relation-cards: people search failed', error);
 
-        if (!isCancelled) {
-          setSearchResults(response?.data?.people ?? []);
-        }
-      } catch {
-        if (!isCancelled) {
-          setSearchResults([]);
-        }
-      } finally {
-        if (!isCancelled) {
-          setIsSearching(false);
-        }
-      }
+          if (!isCancelled) {
+            setSearchResults([]);
+          }
+        })
+        .finally(() => {
+          if (!isCancelled) {
+            setIsSearching(false);
+          }
+        });
     }, SEARCH_DEBOUNCE_MS);
 
     return () => {
@@ -212,7 +216,7 @@ const RelationCards = () => {
 
   const handleToggleLink = useCallback(
     async (person: PersonRecord) => {
-      if (!recordId) {
+      if (!recordId || pendingPersonIds.includes(person.id)) {
         return;
       }
 
@@ -226,7 +230,8 @@ const RelationCards = () => {
         });
 
         await loadRelatedPeople();
-      } catch {
+      } catch (error) {
+        console.error('relation-cards: failed to toggle link', error);
         setErrorMessage('Не удалось изменить связь');
       } finally {
         setPendingPersonIds((previous) =>
@@ -234,7 +239,7 @@ const RelationCards = () => {
         );
       }
     },
-    [linkedPersonIds, loadRelatedPeople, recordId],
+    [linkedPersonIds, loadRelatedPeople, pendingPersonIds, recordId],
   );
 
   const sortedPeople = useMemo(
@@ -257,43 +262,27 @@ const RelationCards = () => {
     overflowWrap: 'anywhere' as const,
   };
 
-  const renderPersonBody = (person: PersonRecord, nameSize: string) => {
-    const personName = getPersonName(person);
-    const phones = getPersonPhones(person);
-    const emails = getPersonEmails(person);
-
-    return (
-      <>
-        <span
-          style={{
-            fontSize: nameSize,
-            fontWeight: theme.font.weight.medium,
-            color: theme.font.color.primary,
-          }}
-        >
-          {personName}
-        </span>
-
-        {phones.map((phone, index) => (
-          <span key={`phone-${index}`} style={valueStyle}>
-            {phone}
-          </span>
-        ))}
-
-        {emails.map((email, index) => (
-          <span key={`email-${index}`} style={valueStyle}>
-            {email}
-          </span>
-        ))}
-
-        {person.kommentariy ? (
-          <span style={{ ...valueStyle, whiteSpace: 'pre-wrap' }}>
-            {person.kommentariy}
-          </span>
-        ) : null}
-      </>
-    );
-  };
+  const renderCheckbox = (isChecked: boolean, isPending: boolean) => (
+    <div
+      style={{
+        width: `${CHECKBOX_SIZE_IN_PX}px`,
+        height: `${CHECKBOX_SIZE_IN_PX}px`,
+        minWidth: `${CHECKBOX_SIZE_IN_PX}px`,
+        borderRadius: '4px',
+        border: `1px solid ${
+          isChecked ? theme.color.blue : theme.border.color.medium
+        }`,
+        background: isChecked ? theme.color.blue : 'transparent',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: isPending ? 0.5 : 1,
+        flexShrink: 0,
+      }}
+    >
+      {isChecked ? <IconCheck size={12} color="#FFFFFF" /> : null}
+    </div>
+  );
 
   return (
     <div
@@ -361,83 +350,60 @@ const RelationCards = () => {
                 const personName = getPersonName(person);
                 const phones = getPersonPhones(person);
                 const emails = getPersonEmails(person);
-                const hint = [phones[0], emails[0]].filter(Boolean).join(' • ');
+                const hint = [phones[0], emails[0]]
+                  .filter(Boolean)
+                  .join(' • ');
 
                 return (
                   <div
                     key={person.id}
+                    onClick={() => {
+                      void handleToggleLink(person);
+                    }}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
                       gap: theme.spacing['2'],
                       padding: `${theme.spacing['2']} ${theme.spacing['3']}`,
                       borderBottom: `1px solid ${theme.border.color.light}`,
+                      cursor: isPending ? 'default' : 'pointer',
                     }}
                   >
-                    <Checkbox
-                      size={CheckboxSize.Small}
-                      checked={isLinked}
-                      disabled={isPending}
-                      onCheckedChange={() => {
-                        void handleToggleLink(person);
-                      }}
-                    />
+                    {renderCheckbox(isLinked, isPending)}
 
                     <div
-                      onClick={() => {
-                        if (!isPending) {
-                          void handleToggleLink(person);
-                        }
-                      }}
                       style={{
                         display: 'flex',
-                        alignItems: 'center',
-                        gap: theme.spacing['2'],
-                        flex: 1,
+                        flexDirection: 'column',
                         minWidth: 0,
-                        cursor: 'pointer',
+                        flex: 1,
                       }}
                     >
-                      <Avatar
-                        size="sm"
-                        placeholder={personName}
-                        placeholderColorSeed={person.id}
-                        avatarUrl={person.avatarUrl ?? undefined}
-                      />
-
-                      <div
+                      <span
                         style={{
-                          display: 'flex',
-                          flexDirection: 'column',
-                          minWidth: 0,
+                          fontSize: theme.font.size.sm,
+                          color: theme.font.color.primary,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
                         }}
                       >
+                        {personName}
+                      </span>
+
+                      {hint ? (
                         <span
                           style={{
-                            fontSize: theme.font.size.sm,
-                            color: theme.font.color.primary,
+                            fontSize: theme.font.size.xs,
+                            color: theme.font.color.tertiary,
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
                           }}
                         >
-                          {personName}
+                          {hint}
                         </span>
-
-                        {hint ? (
-                          <span
-                            style={{
-                              fontSize: theme.font.size.xs,
-                              color: theme.font.color.tertiary,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            {hint}
-                          </span>
-                        ) : null}
-                      </div>
+                      ) : null}
                     </div>
                   </div>
                 );
@@ -484,7 +450,33 @@ const RelationCards = () => {
                   flex: 1,
                 }}
               >
-                {renderPersonBody(person, theme.font.size.md)}
+                <span
+                  style={{
+                    fontSize: theme.font.size.md,
+                    fontWeight: theme.font.weight.medium,
+                    color: theme.font.color.primary,
+                  }}
+                >
+                  {getPersonName(person)}
+                </span>
+
+                {getPersonPhones(person).map((phone, index) => (
+                  <span key={`phone-${index}`} style={valueStyle}>
+                    {phone}
+                  </span>
+                ))}
+
+                {getPersonEmails(person).map((email, index) => (
+                  <span key={`email-${index}`} style={valueStyle}>
+                    {email}
+                  </span>
+                ))}
+
+                {person.kommentariy ? (
+                  <span style={{ ...valueStyle, whiteSpace: 'pre-wrap' }}>
+                    {person.kommentariy}
+                  </span>
+                ) : null}
               </div>
             </div>
           ))
