@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { defineFrontComponent } from 'twenty-sdk/define';
 import {
@@ -195,6 +195,28 @@ const RelationCards = () => {
   const [isCreating, setIsCreating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [hoveredPersonId, setHoveredPersonId] = useState<string | null>(null);
+  const insideInteractionRef = useRef(false);
+
+  const markInsideInteraction = useCallback(() => {
+    insideInteractionRef.current = true;
+
+    setTimeout(() => {
+      insideInteractionRef.current = false;
+    }, 250);
+  }, []);
+
+  const closePicker = useCallback(() => {
+    setIsCreateFormOpen(false);
+    setIsPickerOpen(false);
+  }, []);
+
+  const handleSearchBlur = useCallback(() => {
+    setTimeout(() => {
+      if (!insideInteractionRef.current) {
+        closePicker();
+      }
+    }, 150);
+  }, [closePicker]);
 
   const loadRelatedPeople = useCallback(async () => {
     if (!recordId) {
@@ -395,6 +417,21 @@ const RelationCards = () => {
     [people],
   );
 
+  const isSearchActive = sanitizeSearchTerm(searchQuery).length > 0;
+
+  const pickerRows = useMemo(() => {
+    if (isSearchActive) {
+      return searchResults;
+    }
+
+    const linkedIds = new Set(people.map((person) => person.id));
+
+    return [
+      ...sortedPeople,
+      ...searchResults.filter((person) => !linkedIds.has(person.id)),
+    ];
+  }, [isSearchActive, people, searchResults, sortedPeople]);
+
   const stateMessageStyle = {
     fontSize: theme.font.size.sm,
     color: theme.font.color.tertiary,
@@ -535,6 +572,7 @@ const RelationCards = () => {
 
   return (
     <div
+      onClick={closePicker}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -556,11 +594,16 @@ const RelationCards = () => {
           accent="default"
           ariaLabel="Связать"
           disabled={!recordId}
-          onClick={() => setIsPickerOpen((isOpen) => !isOpen)}
+          onClick={(event) => {
+            event.stopPropagation();
+            setIsPickerOpen((isOpen) => !isOpen);
+          }}
         />
 
         {isPickerOpen ? (
           <div
+            onClick={(event) => event.stopPropagation()}
+            onMouseDown={markInsideInteraction}
             style={{
               position: 'absolute',
               top: '100%',
@@ -580,7 +623,10 @@ const RelationCards = () => {
               renderCreateForm()
             ) : (
               <>
-                <div style={{ padding: theme.spacing['2'] }}>
+                <div
+                  onBlur={handleSearchBlur}
+                  style={{ padding: theme.spacing['2'] }}
+                >
                   <SearchInput
                     value={searchQuery}
                     onChange={setSearchQuery}
@@ -590,15 +636,15 @@ const RelationCards = () => {
                 </div>
 
                 <div style={{ maxHeight: '280px', overflowY: 'auto' }}>
-                  {isSearching && searchResults.length === 0 ? (
+                  {isSearching && pickerRows.length === 0 ? (
                     <div style={stateMessageStyle}>Поиск…</div>
                   ) : null}
 
-                  {!isSearching && searchResults.length === 0 ? (
+                  {!isSearching && pickerRows.length === 0 ? (
                     <div style={stateMessageStyle}>Ничего не найдено</div>
                   ) : null}
 
-                  {searchResults.map((person) => {
+                  {pickerRows.map((person) => {
                     const isLinked = linkedPersonIds.has(person.id);
                     const isPending = pendingPersonIds.includes(person.id);
                     const personName = getPersonName(person);
@@ -688,7 +734,10 @@ const RelationCards = () => {
         ? sortedPeople.map((person) => (
             <div
               key={person.id}
-              onClick={() => handleOpenPerson(person.id)}
+              onClick={() => {
+                closePicker();
+                handleOpenPerson(person.id);
+              }}
               onMouseEnter={() => setHoveredPersonId(person.id)}
               onMouseLeave={() =>
                 setHoveredPersonId((previous) =>
