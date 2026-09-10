@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { useSelectedRecordIds } from 'twenty-sdk/front-component';
 import { RestApiClient } from 'twenty-client-sdk/rest';
 import { Avatar } from 'twenty-ui/data-display';
+import { IconPlus } from 'twenty-ui/icon';
+import { Button, Checkbox, CheckboxSize, SearchInput } from 'twenty-ui/input';
 import { useTheme } from 'twenty-ui/theme-constants';
 
 import { RELATION_CARDS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
@@ -43,6 +45,8 @@ type PeopleResponse = {
 };
 
 const PEOPLE_LIMIT = 200;
+const PICKER_RESULT_LIMIT = 20;
+const SEARCH_DEBOUNCE_MS = 300;
 
 const joinNonEmpty = (parts: Array<string | null | undefined>): string =>
   parts
@@ -90,6 +94,28 @@ const getPersonEmails = (person: PersonRecord): string[] => {
   return emails;
 };
 
+const sanitizeSearchTerm = (term: string): string =>
+  term.replace(/[:%,()[\]{}]/g, ' ').replace(/\s+/g, ' ').trim();
+
+const buildSearchFilter = (term: string): string => {
+  const cleanTerm = sanitizeSearchTerm(term);
+
+  if (!cleanTerm) {
+    return '';
+  }
+
+  const pattern = `%${cleanTerm}%`;
+
+  return [
+    'or(',
+    `name.firstName[ilike]:${pattern},`,
+    `name.lastName[ilike]:${pattern},`,
+    `phones.primaryPhoneNumber[ilike]:${pattern},`,
+    `emails.primaryEmail[ilike]:${pattern}`,
+    ')',
+  ].join('');
+};
+
 const RelationCards = () => {
   const theme = useTheme();
   const [recordId] = useSelectedRecordIds();
@@ -98,45 +124,118 @@ const RelationCards = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  useEffect(() => {
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<PersonRecord[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [pendingPersonIds, setPendingPersonIds] = useState<string[]>([]);
+
+  const loadRelatedPeople = useCallback(async () => {
     if (!recordId) {
       setPeople([]);
+      return;
+    }
+
+    setIsLoading(true);
+    setErrorMessage(null);
+
+    try {
+      const response = await new RestApiClient().get<PeopleResponse>(
+        '/rest/people',
+        {
+          query: {
+            limit: PEOPLE_LIMIT,
+            filter: `companyId[eq]:${recordId}`,
+          },
+        },
+      );
+
+      setPeople(response?.data?.people ?? []);
+    } catch {
+      setErrorMessage('Не удалось загрузить контакты');
+    } finally {
       setIsLoading(false);
+    }
+  }, [recordId]);
+
+  useEffect(() => {
+    void loadRelatedPeople();
+  }, [loadRelatedPeople]);
+
+  useEffect(() => {
+    if (!isPickerOpen || !recordId) {
       return;
     }
 
     let isCancelled = false;
 
-    setIsLoading(true);
-    setErrorMessage(null);
+    setIsSearching(true);
 
-    new RestApiClient()
-      .get<PeopleResponse>('/rest/people', {
-        query: {
-          limit: PEOPLE_LIMIT,
-          filter: `companyId[eq]:${recordId}`,
-        },
-      })
-      .then((response) => {
+    const timer = setTimeout(async () => {
+      try {
+        const filter = buildSearchFilter(searchQuery);
+
+        const response = await new RestApiClient().get<PeopleResponse>(
+          '/rest/people',
+          {
+            query: {
+              limit: PICKER_RESULT_LIMIT,
+              ...(filter ? { filter } : {}),
+            },
+          },
+        );
+
         if (!isCancelled) {
-          setPeople(response?.data?.people ?? []);
+          setSearchResults(response?.data?.people ?? []);
         }
-      })
-      .catch(() => {
+      } catch {
         if (!isCancelled) {
-          setErrorMessage('Не удалось загрузить контакты');
+          setSearchResults([]);
         }
-      })
-      .finally(() => {
+      } finally {
         if (!isCancelled) {
-          setIsLoading(false);
+          setIsSearching(false);
         }
-      });
+      }
+    }, SEARCH_DEBOUNCE_MS);
 
     return () => {
       isCancelled = true;
+      clearTimeout(timer);
     };
-  }, [recordId]);
+  }, [isPickerOpen, searchQuery, recordId]);
+
+  const linkedPersonIds = useMemo(
+    () => new Set(people.map((person) => person.id)),
+    [people],
+  );
+
+  const handleToggleLink = useCallback(
+    async (person: PersonRecord) => {
+      if (!recordId) {
+        return;
+      }
+
+      const isLinked = linkedPersonIds.has(person.id);
+
+      setPendingPersonIds((previous) => [...previous, person.id]);
+
+      try {
+        await new RestApiClient().patch(`/rest/people/${person.id}`, {
+          companyId: isLinked ? null : recordId,
+        });
+
+        await loadRelatedPeople();
+      } catch {
+        setErrorMessage('Не удалось изменить связь');
+      } finally {
+        setPendingPersonIds((previous) =>
+          previous.filter((id) => id !== person.id),
+        );
+      }
+    },
+    [linkedPersonIds, loadRelatedPeople, recordId],
+  );
 
   const sortedPeople = useMemo(
     () =>
@@ -152,17 +251,49 @@ const RelationCards = () => {
     padding: theme.spacing['3'],
   };
 
-  if (isLoading) {
-    return <div style={stateMessageStyle}>Загрузка…</div>;
-  }
+  const valueStyle = {
+    fontSize: theme.font.size.sm,
+    color: theme.font.color.secondary,
+    overflowWrap: 'anywhere' as const,
+  };
 
-  if (errorMessage) {
-    return <div style={stateMessageStyle}>{errorMessage}</div>;
-  }
+  const renderPersonBody = (person: PersonRecord, nameSize: string) => {
+    const personName = getPersonName(person);
+    const phones = getPersonPhones(person);
+    const emails = getPersonEmails(person);
 
-  if (sortedPeople.length === 0) {
-    return <div style={stateMessageStyle}>Нет связанных контактов</div>;
-  }
+    return (
+      <>
+        <span
+          style={{
+            fontSize: nameSize,
+            fontWeight: theme.font.weight.medium,
+            color: theme.font.color.primary,
+          }}
+        >
+          {personName}
+        </span>
+
+        {phones.map((phone, index) => (
+          <span key={`phone-${index}`} style={valueStyle}>
+            {phone}
+          </span>
+        ))}
+
+        {emails.map((email, index) => (
+          <span key={`email-${index}`} style={valueStyle}>
+            {email}
+          </span>
+        ))}
+
+        {person.kommentariy ? (
+          <span style={{ ...valueStyle, whiteSpace: 'pre-wrap' }}>
+            {person.kommentariy}
+          </span>
+        ) : null}
+      </>
+    );
+  };
 
   return (
     <div
@@ -172,73 +303,192 @@ const RelationCards = () => {
         width: '100%',
       }}
     >
-      {sortedPeople.map((person) => {
-        const personName = getPersonName(person);
-        const phones = getPersonPhones(person);
-        const emails = getPersonEmails(person);
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          position: 'relative',
+          padding: `${theme.spacing['1']} 0`,
+        }}
+      >
+        <Button
+          title="Связать"
+          Icon={IconPlus}
+          size="small"
+          variant="secondary"
+          disabled={!recordId}
+          onClick={() => setIsPickerOpen((isOpen) => !isOpen)}
+        />
 
-        const valueStyle = {
-          fontSize: theme.font.size.sm,
-          color: theme.font.color.secondary,
-          overflowWrap: 'anywhere' as const,
-        };
-
-        return (
+        {isPickerOpen ? (
           <div
-            key={person.id}
             style={{
+              position: 'absolute',
+              top: '100%',
+              right: 0,
+              width: '320px',
+              zIndex: 10,
               display: 'flex',
-              gap: theme.spacing['3'],
-              padding: `${theme.spacing['2']} ${theme.spacing['1']}`,
-              borderBottom: `1px solid ${theme.border.color.light}`,
+              flexDirection: 'column',
+              background: theme.background.primary,
+              border: `1px solid ${theme.border.color.medium}`,
+              borderRadius: theme.border.radius.md,
+              boxShadow: theme.boxShadow.strong,
+              overflow: 'hidden',
             }}
           >
-            <Avatar
-              size="md"
-              placeholder={personName}
-              placeholderColorSeed={person.id}
-              avatarUrl={person.avatarUrl ?? undefined}
-            />
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: theme.spacing['1'],
-                minWidth: 0,
-                flex: 1,
-              }}
-            >
-              <span
-                style={{
-                  fontSize: theme.font.size.md,
-                  fontWeight: theme.font.weight.medium,
-                  color: theme.font.color.primary,
-                }}
-              >
-                {personName}
-              </span>
+            <div style={{ padding: theme.spacing['2'] }}>
+              <SearchInput
+                value={searchQuery}
+                onChange={setSearchQuery}
+                placeholder="Имя, телефон, email"
+                autoFocus
+              />
+            </div>
 
-              {phones.map((phone, index) => (
-                <span key={`phone-${index}`} style={valueStyle}>
-                  {phone}
-                </span>
-              ))}
-
-              {emails.map((email, index) => (
-                <span key={`email-${index}`} style={valueStyle}>
-                  {email}
-                </span>
-              ))}
-
-              {person.kommentariy ? (
-                <span style={{ ...valueStyle, whiteSpace: 'pre-wrap' }}>
-                  {person.kommentariy}
-                </span>
+            <div style={{ maxHeight: '280px', overflowY: 'auto' }}>
+              {isSearching && searchResults.length === 0 ? (
+                <div style={stateMessageStyle}>Поиск…</div>
               ) : null}
+
+              {!isSearching && searchResults.length === 0 ? (
+                <div style={stateMessageStyle}>Ничего не найдено</div>
+              ) : null}
+
+              {searchResults.map((person) => {
+                const isLinked = linkedPersonIds.has(person.id);
+                const isPending = pendingPersonIds.includes(person.id);
+                const personName = getPersonName(person);
+                const phones = getPersonPhones(person);
+                const emails = getPersonEmails(person);
+                const hint = [phones[0], emails[0]].filter(Boolean).join(' • ');
+
+                return (
+                  <div
+                    key={person.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: theme.spacing['2'],
+                      padding: `${theme.spacing['2']} ${theme.spacing['3']}`,
+                      borderBottom: `1px solid ${theme.border.color.light}`,
+                    }}
+                  >
+                    <Checkbox
+                      size={CheckboxSize.Small}
+                      checked={isLinked}
+                      disabled={isPending}
+                      onCheckedChange={() => {
+                        void handleToggleLink(person);
+                      }}
+                    />
+
+                    <div
+                      onClick={() => {
+                        if (!isPending) {
+                          void handleToggleLink(person);
+                        }
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: theme.spacing['2'],
+                        flex: 1,
+                        minWidth: 0,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <Avatar
+                        size="sm"
+                        placeholder={personName}
+                        placeholderColorSeed={person.id}
+                        avatarUrl={person.avatarUrl ?? undefined}
+                      />
+
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          minWidth: 0,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: theme.font.size.sm,
+                            color: theme.font.color.primary,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {personName}
+                        </span>
+
+                        {hint ? (
+                          <span
+                            style={{
+                              fontSize: theme.font.size.xs,
+                              color: theme.font.color.tertiary,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {hint}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
-        );
-      })}
+        ) : null}
+      </div>
+
+      {isLoading ? <div style={stateMessageStyle}>Загрузка…</div> : null}
+
+      {!isLoading && errorMessage ? (
+        <div style={stateMessageStyle}>{errorMessage}</div>
+      ) : null}
+
+      {!isLoading && !errorMessage && sortedPeople.length === 0 ? (
+        <div style={stateMessageStyle}>Нет связанных контактов</div>
+      ) : null}
+
+      {!isLoading && !errorMessage && sortedPeople.length > 0
+        ? sortedPeople.map((person) => (
+            <div
+              key={person.id}
+              style={{
+                display: 'flex',
+                gap: theme.spacing['3'],
+                padding: `${theme.spacing['2']} ${theme.spacing['1']}`,
+                borderBottom: `1px solid ${theme.border.color.light}`,
+              }}
+            >
+              <Avatar
+                size="md"
+                placeholder={getPersonName(person)}
+                placeholderColorSeed={person.id}
+                avatarUrl={person.avatarUrl ?? undefined}
+              />
+
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: theme.spacing['1'],
+                  minWidth: 0,
+                  flex: 1,
+                }}
+              >
+                {renderPersonBody(person, theme.font.size.md)}
+              </div>
+            </div>
+          ))
+        : null}
     </div>
   );
 };
