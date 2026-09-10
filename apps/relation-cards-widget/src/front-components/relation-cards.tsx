@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { defineFrontComponent } from 'twenty-sdk/define';
-import { useSelectedRecordIds } from 'twenty-sdk/front-component';
+import { enqueueSnackbar, useSelectedRecordIds } from 'twenty-sdk/front-component';
 import { RestApiClient } from 'twenty-client-sdk/rest';
 import { Avatar } from 'twenty-ui/data-display';
-import { IconCheck, IconPencil } from 'twenty-ui/icon';
+import { IconCheck, IconPencil, IconPlus } from 'twenty-ui/icon';
 import { Button, SearchInput } from 'twenty-ui/input';
 import { useTheme } from 'twenty-ui/theme-constants';
 
@@ -41,6 +41,14 @@ type PersonRecord = {
 type PeopleResponse = {
   data?: {
     people?: PersonRecord[];
+  };
+};
+
+type CreatePersonResponse = {
+  data?: {
+    createPerson?: {
+      id?: string;
+    };
   };
 };
 
@@ -118,6 +126,46 @@ const buildSearchFilter = (term: string): string => {
   ].join('');
 };
 
+const normalizePhone = (raw: string): string => {
+  const trimmed = raw.trim();
+
+  if (!trimmed) {
+    return '';
+  }
+
+  const digits = trimmed.replace(/\D/g, '');
+
+  if (digits.length === 11 && (digits[0] === '7' || digits[0] === '8')) {
+    return `+7${digits.slice(1)}`;
+  }
+
+  if (digits.length === 10) {
+    return `+7${digits}`;
+  }
+
+  if (digits.length === 12 && digits[0] === '7') {
+    return `+${digits}`;
+  }
+
+  return trimmed;
+};
+
+const splitSearchTermIntoName = (
+  term: string,
+): { firstName: string; lastName: string } => {
+  const parts = term.trim().split(/\s+/).filter(Boolean);
+
+  if (parts.length === 0) {
+    return { firstName: '', lastName: '' };
+  }
+
+  if (parts.length === 1) {
+    return { firstName: parts[0], lastName: '' };
+  }
+
+  return { firstName: parts.slice(1).join(' '), lastName: parts[0] };
+};
+
 const RelationCards = () => {
   const theme = useTheme();
   const [recordId] = useSelectedRecordIds();
@@ -130,7 +178,17 @@ const RelationCards = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<PersonRecord[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [searchRefreshKey, setSearchRefreshKey] = useState(0);
   const [pendingPersonIds, setPendingPersonIds] = useState<string[]>([]);
+
+  const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
+  const [formFirstName, setFormFirstName] = useState('');
+  const [formLastName, setFormLastName] = useState('');
+  const [formPhone, setFormPhone] = useState('');
+  const [formEmail, setFormEmail] = useState('');
+  const [formComment, setFormComment] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const loadRelatedPeople = useCallback(async () => {
     if (!recordId) {
@@ -207,7 +265,7 @@ const RelationCards = () => {
       isCancelled = true;
       clearTimeout(timer);
     };
-  }, [isPickerOpen, searchQuery, recordId]);
+  }, [isPickerOpen, searchQuery, recordId, searchRefreshKey]);
 
   const linkedPersonIds = useMemo(
     () => new Set(people.map((person) => person.id)),
@@ -242,6 +300,79 @@ const RelationCards = () => {
     [linkedPersonIds, loadRelatedPeople, pendingPersonIds, recordId],
   );
 
+  const openCreateForm = useCallback(() => {
+    const preset = splitSearchTermIntoName(searchQuery);
+
+    setFormFirstName(preset.firstName);
+    setFormLastName(preset.lastName);
+    setFormError(null);
+    setIsCreateFormOpen(true);
+  }, [searchQuery]);
+
+  const closeCreateForm = useCallback(() => {
+    setIsCreateFormOpen(false);
+    setFormError(null);
+  }, []);
+
+  const handleCreatePerson = useCallback(async () => {
+    if (!recordId || isCreating) {
+      return;
+    }
+
+    const firstName = formFirstName.trim();
+    const lastName = formLastName.trim();
+    const phone = normalizePhone(formPhone);
+    const email = formEmail.trim();
+    const comment = formComment.trim();
+
+    if (!firstName && !lastName) {
+      setFormError('Укажите имя или фамилию');
+      return;
+    }
+
+    setIsCreating(true);
+    setFormError(null);
+
+    try {
+      await new RestApiClient().post<CreatePersonResponse>('/rest/people', {
+        name: { firstName, lastName },
+        ...(phone ? { phones: { primaryPhoneNumber: phone } } : {}),
+        ...(email ? { emails: { primaryEmail: email } } : {}),
+        ...(comment ? { kommentariy: comment } : {}),
+        companyId: recordId,
+      });
+
+      setFormFirstName('');
+      setFormLastName('');
+      setFormPhone('');
+      setFormEmail('');
+      setFormComment('');
+      setIsCreateFormOpen(false);
+
+      await loadRelatedPeople();
+      setSearchRefreshKey((previous) => previous + 1);
+
+      await enqueueSnackbar({
+        message: 'Контакт создан',
+        variant: 'success',
+      });
+    } catch (error) {
+      console.error('relation-cards: failed to create person', error);
+      setFormError('Не удалось создать контакт (проверьте телефон и email)');
+    } finally {
+      setIsCreating(false);
+    }
+  }, [
+    formComment,
+    formEmail,
+    formFirstName,
+    formLastName,
+    formPhone,
+    isCreating,
+    loadRelatedPeople,
+    recordId,
+  ]);
+
   const sortedPeople = useMemo(
     () =>
       [...people].sort((personA, personB) =>
@@ -260,6 +391,30 @@ const RelationCards = () => {
     fontSize: theme.font.size.sm,
     color: theme.font.color.secondary,
     overflowWrap: 'anywhere' as const,
+  };
+
+  const inputStyle = {
+    width: '100%',
+    boxSizing: 'border-box' as const,
+    padding: `${theme.spacing['1']} ${theme.spacing['2']}`,
+    borderRadius: theme.border.radius.sm,
+    border: `1px solid ${theme.border.color.medium}`,
+    background: theme.background.primary,
+    color: theme.font.color.primary,
+    fontSize: theme.font.size.sm,
+    fontFamily: 'inherit',
+    outline: 'none',
+  };
+
+  const createRowStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: theme.spacing['2'],
+    padding: `${theme.spacing['2']} ${theme.spacing['3']}`,
+    cursor: 'pointer',
+    color: theme.font.color.primary,
+    fontSize: theme.font.size.sm,
+    borderTop: `1px solid ${theme.border.color.light}`,
   };
 
   const renderCheckbox = (isChecked: boolean, isPending: boolean) => (
@@ -281,6 +436,86 @@ const RelationCards = () => {
       }}
     >
       {isChecked ? <IconCheck size={12} color="#FFFFFF" /> : null}
+    </div>
+  );
+
+  const createLabel = sanitizeSearchTerm(searchQuery)
+    ? `Создать «${sanitizeSearchTerm(searchQuery)}»`
+    : 'Создать нового контакта';
+
+  const renderCreateForm = () => (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: theme.spacing['2'],
+        padding: theme.spacing['3'],
+      }}
+    >
+      <div style={{ fontSize: theme.font.size.sm, color: theme.font.color.secondary }}>
+        Новый контакт
+      </div>
+
+      <input
+        style={inputStyle}
+        value={formFirstName}
+        placeholder="Имя"
+        onChange={(event) => setFormFirstName(event.target.value)}
+      />
+
+      <input
+        style={inputStyle}
+        value={formLastName}
+        placeholder="Фамилия"
+        onChange={(event) => setFormLastName(event.target.value)}
+      />
+
+      <input
+        style={inputStyle}
+        value={formPhone}
+        placeholder="Телефон"
+        onChange={(event) => setFormPhone(event.target.value)}
+      />
+
+      <input
+        style={inputStyle}
+        value={formEmail}
+        placeholder="Email"
+        onChange={(event) => setFormEmail(event.target.value)}
+      />
+
+      <textarea
+        style={{ ...inputStyle, minHeight: '56px', resize: 'vertical' }}
+        value={formComment}
+        placeholder="Комментарий"
+        onChange={(event) => setFormComment(event.target.value)}
+      />
+
+      {formError ? (
+        <div style={{ fontSize: theme.font.size.sm, color: theme.color.red }}>
+          {formError}
+        </div>
+      ) : null}
+
+      <div style={{ display: 'flex', gap: theme.spacing['2'] }}>
+        <Button
+          title={isCreating ? 'Создание…' : 'Создать'}
+          size="small"
+          variant="primary"
+          disabled={isCreating}
+          onClick={() => {
+            void handleCreatePerson();
+          }}
+        />
+
+        <Button
+          title="Отмена"
+          size="small"
+          variant="secondary"
+          disabled={isCreating}
+          onClick={closeCreateForm}
+        />
+      </div>
     </div>
   );
 
@@ -326,89 +561,100 @@ const RelationCards = () => {
               overflow: 'hidden',
             }}
           >
-            <div style={{ padding: theme.spacing['2'] }}>
-              <SearchInput
-                value={searchQuery}
-                onChange={setSearchQuery}
-                placeholder="Имя, телефон, email"
-                autoFocus
-              />
-            </div>
+            {isCreateFormOpen ? (
+              renderCreateForm()
+            ) : (
+              <>
+                <div style={{ padding: theme.spacing['2'] }}>
+                  <SearchInput
+                    value={searchQuery}
+                    onChange={setSearchQuery}
+                    placeholder="Имя, телефон, email"
+                    autoFocus
+                  />
+                </div>
 
-            <div style={{ maxHeight: '280px', overflowY: 'auto' }}>
-              {isSearching && searchResults.length === 0 ? (
-                <div style={stateMessageStyle}>Поиск…</div>
-              ) : null}
+                <div style={{ maxHeight: '280px', overflowY: 'auto' }}>
+                  {isSearching && searchResults.length === 0 ? (
+                    <div style={stateMessageStyle}>Поиск…</div>
+                  ) : null}
 
-              {!isSearching && searchResults.length === 0 ? (
-                <div style={stateMessageStyle}>Ничего не найдено</div>
-              ) : null}
+                  {!isSearching && searchResults.length === 0 ? (
+                    <div style={stateMessageStyle}>Ничего не найдено</div>
+                  ) : null}
 
-              {searchResults.map((person) => {
-                const isLinked = linkedPersonIds.has(person.id);
-                const isPending = pendingPersonIds.includes(person.id);
-                const personName = getPersonName(person);
-                const phones = getPersonPhones(person);
-                const emails = getPersonEmails(person);
-                const hint = [phones[0], emails[0]]
-                  .filter(Boolean)
-                  .join(' • ');
+                  {searchResults.map((person) => {
+                    const isLinked = linkedPersonIds.has(person.id);
+                    const isPending = pendingPersonIds.includes(person.id);
+                    const personName = getPersonName(person);
+                    const phones = getPersonPhones(person);
+                    const emails = getPersonEmails(person);
+                    const hint = [phones[0], emails[0]]
+                      .filter(Boolean)
+                      .join(' • ');
 
-                return (
-                  <div
-                    key={person.id}
-                    onClick={() => {
-                      void handleToggleLink(person);
-                    }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: theme.spacing['2'],
-                      padding: `${theme.spacing['2']} ${theme.spacing['3']}`,
-                      borderBottom: `1px solid ${theme.border.color.light}`,
-                      cursor: isPending ? 'default' : 'pointer',
-                    }}
-                  >
-                    {renderCheckbox(isLinked, isPending)}
-
-                    <div
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        minWidth: 0,
-                        flex: 1,
-                      }}
-                    >
-                      <span
+                    return (
+                      <div
+                        key={person.id}
+                        onClick={() => {
+                          void handleToggleLink(person);
+                        }}
                         style={{
-                          fontSize: theme.font.size.sm,
-                          color: theme.font.color.primary,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: theme.spacing['2'],
+                          padding: `${theme.spacing['2']} ${theme.spacing['3']}`,
+                          borderBottom: `1px solid ${theme.border.color.light}`,
+                          cursor: isPending ? 'default' : 'pointer',
                         }}
                       >
-                        {personName}
-                      </span>
+                        {renderCheckbox(isLinked, isPending)}
 
-                      {hint ? (
-                        <span
+                        <div
                           style={{
-                            fontSize: theme.font.size.xs,
-                            color: theme.font.color.tertiary,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            minWidth: 0,
+                            flex: 1,
                           }}
                         >
-                          {hint}
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                          <span
+                            style={{
+                              fontSize: theme.font.size.sm,
+                              color: theme.font.color.primary,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {personName}
+                          </span>
+
+                          {hint ? (
+                            <span
+                              style={{
+                                fontSize: theme.font.size.xs,
+                                color: theme.font.color.tertiary,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {hint}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div onClick={openCreateForm} style={createRowStyle}>
+                  <IconPlus size={16} />
+                  <span>{createLabel}</span>
+                </div>
+              </>
+            )}
           </div>
         ) : null}
       </div>
