@@ -972,7 +972,7 @@ const RelationCards = () => {
 
 export default defineFrontComponent({
   universalIdentifier: RELATION_CARDS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER,
-  name: 'Карточки связей',
+  name: 'Контактные лица',
   description: 'Связанные записи в виде карточек с выбранными полями',
   component: RelationCards,
 });

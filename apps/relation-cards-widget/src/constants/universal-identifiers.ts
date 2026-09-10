@@ -1,4 +1,4 @@
-export const APP_DISPLAY_NAME = 'Карточки связей';
+export const APP_DISPLAY_NAME = 'Контактные лица';
 export const APP_DESCRIPTION = '';
 export const APPLICATION_UNIVERSAL_IDENTIFIER = '0aa91f91-77bc-49fc-b11f-0ad42da12f5e';
 export const DEFAULT_ROLE_UNIVERSAL_IDENTIFIER = '8c68907d-f00c-4a65-8623-fc03066532c8';
