@@ -5,7 +5,7 @@ import { enqueueSnackbar, useSelectedRecordIds } from 'twenty-sdk/front-componen
 import { RestApiClient } from 'twenty-client-sdk/rest';
 import { Avatar } from 'twenty-ui/data-display';
 import { IconCheck, IconPencil, IconPlus } from 'twenty-ui/icon';
-import { Button, SearchInput } from 'twenty-ui/input';
+import { Button, IconButton, SearchInput } from 'twenty-ui/input';
 import { useTheme } from 'twenty-ui/theme-constants';
 
 import { RELATION_CARDS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
@@ -535,11 +535,12 @@ const RelationCards = () => {
           padding: `${theme.spacing['1']} 0`,
         }}
       >
-        <Button
-          title="Связать"
+        <IconButton
           Icon={IconPencil}
-          size="small"
+          size="medium"
           variant="secondary"
+          accent="default"
+          ariaLabel="Связать"
           disabled={!recordId}
           onClick={() => setIsPickerOpen((isOpen) => !isOpen)}
         />
