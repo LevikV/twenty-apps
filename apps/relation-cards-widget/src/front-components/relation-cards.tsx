@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { defineFrontComponent } from 'twenty-sdk/define';
-import { enqueueSnackbar, useSelectedRecordIds } from 'twenty-sdk/front-component';
+import {
+  enqueueSnackbar,
+  openSidePanelPage,
+  SidePanelPages,
+  useSelectedRecordIds,
+} from 'twenty-sdk/front-component';
 import { RestApiClient } from 'twenty-client-sdk/rest';
 import { Avatar } from 'twenty-ui/data-display';
 import { IconCheck, IconPencil, IconPlus } from 'twenty-ui/icon';
@@ -189,6 +194,7 @@ const RelationCards = () => {
   const [formComment, setFormComment] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [hoveredPersonId, setHoveredPersonId] = useState<string | null>(null);
 
   const loadRelatedPeople = useCallback(async () => {
     if (!recordId) {
@@ -312,6 +318,14 @@ const RelationCards = () => {
   const closeCreateForm = useCallback(() => {
     setIsCreateFormOpen(false);
     setFormError(null);
+  }, []);
+
+  const handleOpenPerson = useCallback((personId: string) => {
+    void openSidePanelPage({
+      page: SidePanelPages.ViewRecord,
+      recordId: personId,
+      objectNameSingular: 'person',
+    });
   }, []);
 
   const handleCreatePerson = useCallback(async () => {
@@ -674,11 +688,24 @@ const RelationCards = () => {
         ? sortedPeople.map((person) => (
             <div
               key={person.id}
+              onClick={() => handleOpenPerson(person.id)}
+              onMouseEnter={() => setHoveredPersonId(person.id)}
+              onMouseLeave={() =>
+                setHoveredPersonId((previous) =>
+                  previous === person.id ? null : previous,
+                )
+              }
               style={{
                 display: 'flex',
                 gap: theme.spacing['3'],
                 padding: `${theme.spacing['2']} ${theme.spacing['1']}`,
                 borderBottom: `1px solid ${theme.border.color.light}`,
+                cursor: 'pointer',
+                borderRadius: theme.border.radius.sm,
+                background:
+                  hoveredPersonId === person.id
+                    ? theme.background.transparent.light
+                    : 'transparent',
               }}
             >
               <Avatar
