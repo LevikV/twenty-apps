@@ -196,6 +196,7 @@ const RelationCards = () => {
   const [formError, setFormError] = useState<string | null>(null);
   const [hoveredPersonId, setHoveredPersonId] = useState<string | null>(null);
   const insideInteractionRef = useRef(false);
+  const pickerOpenedAtRef = useRef(0);
 
   const markInsideInteraction = useCallback(() => {
     insideInteractionRef.current = true;
@@ -212,9 +213,15 @@ const RelationCards = () => {
 
   const handleSearchBlur = useCallback(() => {
     setTimeout(() => {
-      if (!insideInteractionRef.current) {
-        closePicker();
+      if (insideInteractionRef.current) {
+        return;
       }
+
+      if (Date.now() - pickerOpenedAtRef.current < 500) {
+        return;
+      }
+
+      closePicker();
     }, 150);
   }, [closePicker]);
 
@@ -572,7 +579,6 @@ const RelationCards = () => {
 
   return (
     <div
-      onClick={closePicker}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -596,7 +602,14 @@ const RelationCards = () => {
           disabled={!recordId}
           onClick={(event) => {
             event.stopPropagation();
-            setIsPickerOpen((isOpen) => !isOpen);
+
+            const nextIsPickerOpen = !isPickerOpen;
+
+            if (nextIsPickerOpen) {
+              pickerOpenedAtRef.current = Date.now();
+            }
+
+            setIsPickerOpen(nextIsPickerOpen);
           }}
         />
 
