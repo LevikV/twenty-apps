@@ -4,7 +4,7 @@ import { defineFrontComponent } from 'twenty-sdk/define';
 import { useSelectedRecordIds } from 'twenty-sdk/front-component';
 import { RestApiClient } from 'twenty-client-sdk/rest';
 import { Avatar } from 'twenty-ui/data-display';
-import { IconCheck, IconPlus } from 'twenty-ui/icon';
+import { IconCheck, IconPencil } from 'twenty-ui/icon';
 import { Button, SearchInput } from 'twenty-ui/input';
 import { useTheme } from 'twenty-ui/theme-constants';
 
@@ -302,7 +302,7 @@ const RelationCards = () => {
       >
         <Button
           title="Связать"
-          Icon={IconPlus}
+          Icon={IconPencil}
           size="small"
           variant="secondary"
           disabled={!recordId}
