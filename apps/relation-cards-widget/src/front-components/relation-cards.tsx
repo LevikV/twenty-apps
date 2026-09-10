@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import { defineFrontComponent } from 'twenty-sdk/define';
 import {
   enqueueSnackbar,
+  getApplicationVariable,
   openSidePanelPage,
   SidePanelPages,
   useSelectedRecordIds,
@@ -13,6 +21,12 @@ import { IconCheck, IconPencil, IconPlus } from 'twenty-ui/icon';
 import { Button, IconButton, SearchInput } from 'twenty-ui/input';
 import { useTheme } from 'twenty-ui/theme-constants';
 
+import {
+  CARD_FIELDS_VARIABLE_KEY,
+  DEFAULT_CARD_FIELDS,
+  SHOW_AVATAR_VARIABLE_KEY,
+  SORT_ORDER_VARIABLE_KEY,
+} from 'src/constants/application-variables';
 import { RELATION_CARDS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 
 type FullNameField = {
@@ -34,12 +48,25 @@ type EmailsField = {
   additionalEmails?: string[] | null;
 };
 
+type AddressField = {
+  addressStreet1?: string | null;
+  addressStreet2?: string | null;
+  addressCity?: string | null;
+  addressState?: string | null;
+  addressPostcode?: string | null;
+  addressCountry?: string | null;
+};
+
 type PersonRecord = {
   id: string;
+  createdAt?: string | null;
   name?: FullNameField | null;
   phones?: PhonesField | null;
   emails?: EmailsField | null;
   kommentariy?: string | null;
+  jobTitle?: string | null;
+  adresYuridicheskiy?: AddressField | null;
+  tipOtnosheniy?: string[] | null;
   avatarUrl?: string | null;
 };
 
@@ -171,9 +198,71 @@ const splitSearchTermIntoName = (
   return { firstName: parts.slice(1).join(' '), lastName: parts[0] };
 };
 
+const readConfiguredStringArray = (key: string): string[] | null => {
+  const raw = getApplicationVariable(key) as unknown;
+
+  if (Array.isArray(raw)) {
+    return raw.map((item) => String(item));
+  }
+
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+
+    if (Array.isArray(parsed)) {
+      return parsed.map((item) => String(item));
+    }
+  } catch {
+    // значение может быть простым списком через запятую
+  }
+
+  return raw
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+const readConfiguredCardFields = (): string[] => {
+  const configured = readConfiguredStringArray(CARD_FIELDS_VARIABLE_KEY);
+
+  return configured && configured.length > 0
+    ? configured
+    : DEFAULT_CARD_FIELDS;
+};
+
+const readShowAvatar = (): boolean =>
+  getApplicationVariable(SHOW_AVATAR_VARIABLE_KEY) !== 'false';
+
+const readSortOrder = (): 'name' | 'newest' =>
+  getApplicationVariable(SORT_ORDER_VARIABLE_KEY) === 'newest'
+    ? 'newest'
+    : 'name';
+
+const getAddressLines = (address?: AddressField | null): string[] => {
+  if (!address) {
+    return [];
+  }
+
+  return [
+    joinNonEmpty([address.addressPostcode, address.addressCity]),
+    joinNonEmpty([address.addressStreet1, address.addressStreet2]),
+    joinNonEmpty([address.addressState, address.addressCountry]),
+  ].filter(Boolean);
+};
+
+const getMultiselectValues = (values?: string[] | null): string[] =>
+  (values ?? []).filter((value): value is string => Boolean(value));
+
 const RelationCards = () => {
   const theme = useTheme();
   const [recordId] = useSelectedRecordIds();
+
+  const cardFields = useMemo(() => readConfiguredCardFields(), []);
+  const showAvatar = useMemo(() => readShowAvatar(), []);
+  const sortOrder = useMemo(() => readSortOrder(), []);
 
   const [people, setPeople] = useState<PersonRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -416,13 +505,21 @@ const RelationCards = () => {
     recordId,
   ]);
 
-  const sortedPeople = useMemo(
-    () =>
-      [...people].sort((personA, personB) =>
-        getPersonName(personA).localeCompare(getPersonName(personB), 'ru'),
-      ),
-    [people],
-  );
+  const sortedPeople = useMemo(() => {
+    const copy = [...people];
+
+    if (sortOrder === 'newest') {
+      return copy.sort((personA, personB) =>
+        String(personB.createdAt ?? '').localeCompare(
+          String(personA.createdAt ?? ''),
+        ),
+      );
+    }
+
+    return copy.sort((personA, personB) =>
+      getPersonName(personA).localeCompare(getPersonName(personB), 'ru'),
+    );
+  }, [people, sortOrder]);
 
   const isSearchActive = sanitizeSearchTerm(searchQuery).length > 0;
 
@@ -449,6 +546,63 @@ const RelationCards = () => {
     fontSize: theme.font.size.sm,
     color: theme.font.color.secondary,
     overflowWrap: 'anywhere' as const,
+  };
+
+  const titleStyle = {
+    fontSize: theme.font.size.md,
+    fontWeight: theme.font.weight.medium,
+    color: theme.font.color.primary,
+  };
+
+  const renderCardField = (person: PersonRecord, field: string) => {
+    switch (field) {
+      case 'name':
+        return <span style={titleStyle}>{getPersonName(person)}</span>;
+
+      case 'phones':
+        return getPersonPhones(person).map((phone, index) => (
+          <span key={`phone-${index}`} style={valueStyle}>
+            {phone}
+          </span>
+        ));
+
+      case 'emails':
+        return getPersonEmails(person).map((email, index) => (
+          <span key={`email-${index}`} style={valueStyle}>
+            {email}
+          </span>
+        ));
+
+      case 'kommentariy':
+        return person.kommentariy ? (
+          <span style={{ ...valueStyle, whiteSpace: 'pre-wrap' }}>
+            {person.kommentariy}
+          </span>
+        ) : null;
+
+      case 'jobTitle':
+        return person.jobTitle ? (
+          <span style={valueStyle}>{person.jobTitle}</span>
+        ) : null;
+
+      case 'adresYuridicheskiy':
+        return getAddressLines(person.adresYuridicheskiy).map((line, index) => (
+          <span key={`address-${index}`} style={valueStyle}>
+            {line}
+          </span>
+        ));
+
+      case 'tipOtnosheniy': {
+        const values = getMultiselectValues(person.tipOtnosheniy);
+
+        return values.length > 0 ? (
+          <span style={valueStyle}>{values.join(', ')}</span>
+        ) : null;
+      }
+
+      default:
+        return null;
+    }
   };
 
   const inputStyle = {
@@ -770,12 +924,14 @@ const RelationCards = () => {
                     : 'transparent',
               }}
             >
-              <Avatar
-                size="md"
-                placeholder={getPersonName(person)}
-                placeholderColorSeed={person.id}
-                avatarUrl={person.avatarUrl ?? undefined}
-              />
+              {showAvatar ? (
+                <Avatar
+                  size="md"
+                  placeholder={getPersonName(person)}
+                  placeholderColorSeed={person.id}
+                  avatarUrl={person.avatarUrl ?? undefined}
+                />
+              ) : null}
 
               <div
                 style={{
@@ -786,33 +942,11 @@ const RelationCards = () => {
                   flex: 1,
                 }}
               >
-                <span
-                  style={{
-                    fontSize: theme.font.size.md,
-                    fontWeight: theme.font.weight.medium,
-                    color: theme.font.color.primary,
-                  }}
-                >
-                  {getPersonName(person)}
-                </span>
-
-                {getPersonPhones(person).map((phone, index) => (
-                  <span key={`phone-${index}`} style={valueStyle}>
-                    {phone}
-                  </span>
+                {cardFields.map((field) => (
+                  <Fragment key={field}>
+                    {renderCardField(person, field)}
+                  </Fragment>
                 ))}
-
-                {getPersonEmails(person).map((email, index) => (
-                  <span key={`email-${index}`} style={valueStyle}>
-                    {email}
-                  </span>
-                ))}
-
-                {person.kommentariy ? (
-                  <span style={{ ...valueStyle, whiteSpace: 'pre-wrap' }}>
-                    {person.kommentariy}
-                  </span>
-                ) : null}
               </div>
             </div>
           ))
