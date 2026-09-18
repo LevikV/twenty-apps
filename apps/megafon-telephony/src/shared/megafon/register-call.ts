@@ -5,6 +5,8 @@ import {
   findCallByCallId,
   updateCallRecording,
 } from 'src/shared/megafon/call-record';
+import type { EmployeeLookup } from 'src/shared/megafon/employee-lookup';
+import { ensureCallLinks, type LinkResult } from 'src/shared/megafon/link-call';
 import { buildCallTitle } from 'src/shared/megafon/parse';
 import type { ParsedCall } from 'src/shared/megafon/types';
 
@@ -18,6 +20,7 @@ export type RegisterResult = {
   callId: string;
   calendarEventId: string;
   title: string;
+  links?: LinkResult;
   reason?: string;
 };
 
@@ -31,6 +34,7 @@ const titleFor = (parsed: ParsedCall, lookup: ClientLookup): string => {
 export const registerCall = async (
   parsed: ParsedCall,
   lookup: ClientLookup,
+  employee: EmployeeLookup,
 ): Promise<RegisterResult> => {
   if (!parsed.callid) {
     return {
@@ -48,11 +52,21 @@ export const registerCall = async (
   if (existing) {
     await updateCallRecording(existing.id, parsed);
 
+    const links = await ensureCallLinks({
+      calendarEventId: existing.calendarEventId,
+      lookup,
+      employee,
+      clientPhone: parsed.clientPhone,
+      happensAt: parsed.startedAtIso || new Date().toISOString(),
+      title: existing.title || title,
+    });
+
     return {
       action: 'updated',
       callId: existing.id,
       calendarEventId: existing.calendarEventId,
       title: existing.title || title,
+      links,
     };
   }
 
@@ -60,6 +74,14 @@ export const registerCall = async (
   const endsAt = parsed.endedAtIso || startsAt;
   const calendarEventId = await createCallEvent({ title, startsAt, endsAt });
   const call = await createCallRecording({ parsed, title, calendarEventId });
+  const links = await ensureCallLinks({
+    calendarEventId,
+    lookup,
+    employee,
+    clientPhone: parsed.clientPhone,
+    happensAt: startsAt,
+    title,
+  });
 
-  return { action: 'created', callId: call.id, calendarEventId, title };
+  return { action: 'created', callId: call.id, calendarEventId, title, links };
 };

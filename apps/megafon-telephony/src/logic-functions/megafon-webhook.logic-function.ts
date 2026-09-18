@@ -62,7 +62,7 @@ const handler = async (event: RoutePayload) => {
   let result: RegisterResult | undefined;
 
   try {
-    result = await registerCall(parsed, lookup);
+    result = await registerCall(parsed, lookup, employee);
   } catch (error) {
     errors.push(`звонок: ${describeError(error)}`);
   }

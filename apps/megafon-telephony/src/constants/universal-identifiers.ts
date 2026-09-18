@@ -10,5 +10,28 @@ export const DEFAULT_ROLE_UNIVERSAL_IDENTIFIER =
 export const MEGAFON_WEBHOOK_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
   'e734332f-3e64-4a49-a9e3-bbc308f35a32';
 
+/**
+ * Свой тип активности приложения для ленты (timeline).
+ *
+ * Штатный системный тип `calendarEventLinked` приложению недоступен: ядро
+ * разрешает приложению писать в ленту только своими типами. Тип объявляется
+ * манифестом приложения (`defineTimelineActivityType`) и создаётся при `apply`.
+ */
+export const TIMELINE_ACTIVITY_TYPE_UNIVERSAL_IDENTIFIER =
+  'c1a4d8f2-5b7e-4a93-9d21-6f0e2b8c4a77';
+
+/** Название типа активности (техническое) и подпись в интерфейсе. */
+export const TIMELINE_ACTIVITY_TYPE_NAME = 'megafonCallLinked';
+export const TIMELINE_ACTIVITY_TYPE_LABEL = 'звонок МегаФон';
+
 /** Путь маршрута: публичный URL будет https://crm.kplus79.ru/s<WEBHOOK_ROUTE_PATH> */
 export const WEBHOOK_ROUTE_PATH = '/megafon';
+
+/**
+ * UID стандартных объектов Twenty (одинаковы во всех воркспейсах) — нужны,
+ * чтобы привязать запись ленты к компании и к событию календаря.
+ */
+export const COMPANY_OBJECT_UNIVERSAL_IDENTIFIER =
+  '20202020-b374-4779-a561-80086cb2e17f';
+export const CALENDAR_EVENT_OBJECT_UNIVERSAL_IDENTIFIER =
+  '20202020-8f1d-4eef-9f85-0d1965e27221';
