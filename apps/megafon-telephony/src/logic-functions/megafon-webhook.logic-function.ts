@@ -2,16 +2,20 @@ import { defineLogicFunction } from 'twenty-sdk/define';
 import { Response, kv, type RoutePayload } from 'twenty-sdk/logic-function';
 
 import { MEGAFON_WEBHOOK_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
+import { createOne, describeError } from 'src/shared/crm';
 
 /**
  * Приёмник вебхуков ВАТС МегаФон (этап 0 — разведка).
  *
  * Задача этого шага: доказать, что приложение принимает боевой вебхук целиком
- * (urlencoded приходит распарсенным объектом), сохраняет его для разбора и может
- * вернуть свой HTTP-ответ. Бизнес-логика (создание звонка в CRM) появится на следующем этапе.
+ * (urlencoded приходит распарсенным объектом), сохраняет его для разбора, может
+ * вернуть свой HTTP-ответ и может писать записи в CRM.
+ *
+ * Бизнес-логика звонка (поиск клиента и компании, сотрудник, связи, лента)
+ * появится на следующем этапе.
  *
  * Наблюдение: console.log из логик-функции не виден в docker logs, поэтому
- * последний payload пишем в kv-хранилище приложения — читается SQL-ом.
+ * результаты пишем в kv-хранилище приложения — читается SQL-ом.
  */
 const handler = async (event: RoutePayload) => {
   const body = (event?.body ?? {}) as Record<string, unknown>;
@@ -43,12 +47,60 @@ const handler = async (event: RoutePayload) => {
     lastCmd: cmd,
   });
 
+  // Пробная запись в CRM (только разведка, включается явным флагом test_write=1
+  // и тестовым callid). Нужна, чтобы проверить: REST из логик-функции создаёт
+  // событие календаря и запись звонка, несмотря на стоп-лист автоматизации.
+  if (String(body.test_write ?? '') === '1' && callid.startsWith('KPTEST')) {
+    const startedAt = new Date().toISOString();
+    const title = `📞 Тест приложения: ${String(body.phone ?? callid)}`;
+
+    let probe: Record<string, unknown>;
+
+    try {
+      const calendarEvent = await createOne('calendarEvents', 'calendarEvent', {
+        title,
+        startsAt: startedAt,
+        endsAt: startedAt,
+        isFullDay: false,
+        description: 'Пробная запись из приложения «Телефония МегаФон» (разведка)',
+      });
+
+      const callRecording = await createOne('callRecordings', 'callRecording', {
+        title,
+        status: 'NOT_RECORDED',
+        startedAt,
+        endedAt: startedAt,
+        calendarEventId: calendarEvent.id,
+        externalRecordingId: callid,
+      });
+
+      probe = {
+        ok: true,
+        command: cmd,
+        callid,
+        calendarEventId: calendarEvent.id,
+        callRecordingId: callRecording.id,
+      };
+    } catch (error) {
+      probe = {
+        ok: false,
+        command: cmd,
+        callid,
+        error: describeError(error),
+      };
+    }
+
+    await kv.set('webhook:probe', { at: new Date().toISOString(), ...probe });
+
+    return new Response(JSON.stringify({ source: 'megafon-telephony', ...probe }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
   // Хук contact — единственный, где ВАТС ждёт ответ от CRM (имя клиента + ответственный).
   // Пока возвращаем технический ответ: проверяем, что наш HTTP-ответ вообще доходит.
-  const answer =
-    cmd === 'contact'
-      ? { source: 'megafon-telephony', cmd, ok: true }
-      : { source: 'megafon-telephony', cmd, ok: true, stored: true };
+  const answer = { source: 'megafon-telephony', cmd, ok: true, stored: true };
 
   return new Response(JSON.stringify(answer), {
     status: 200,
