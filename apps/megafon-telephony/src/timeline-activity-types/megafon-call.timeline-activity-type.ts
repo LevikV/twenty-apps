@@ -1,6 +1,7 @@
 import { defineTimelineActivityType } from 'twenty-sdk/define';
 
 import {
+  TIMELINE_ACTIVITY_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER,
   TIMELINE_ACTIVITY_TYPE_LABEL,
   TIMELINE_ACTIVITY_TYPE_NAME,
   TIMELINE_ACTIVITY_TYPE_UNIVERSAL_IDENTIFIER,
@@ -17,4 +18,6 @@ export default defineTimelineActivityType({
   name: TIMELINE_ACTIVITY_TYPE_NAME,
   label: TIMELINE_ACTIVITY_TYPE_LABEL,
   icon: 'IconPhone',
+  frontComponentUniversalIdentifier:
+    TIMELINE_ACTIVITY_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER,
 });

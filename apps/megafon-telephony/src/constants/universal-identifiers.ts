@@ -24,6 +24,15 @@ export const TIMELINE_ACTIVITY_TYPE_UNIVERSAL_IDENTIFIER =
 export const TIMELINE_ACTIVITY_TYPE_NAME = 'megafonCallLinked';
 export const TIMELINE_ACTIVITY_TYPE_LABEL = 'звонок МегаФон';
 
+/**
+ * Свой рендерер строки ленты (фронт-компонент приложения).
+ *
+ * Чужой (штатный) рендерер приложению запрещён — ядро отвечает
+ * «references front component …, which is not defined by this application».
+ */
+export const TIMELINE_ACTIVITY_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
+  'd4b1f0a7-2f5c-4a3e-9c48-71b6d5e0a912';
+
 /** Путь маршрута: публичный URL будет https://crm.kplus79.ru/s<WEBHOOK_ROUTE_PATH> */
 export const WEBHOOK_ROUTE_PATH = '/megafon';
 
