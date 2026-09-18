@@ -2,59 +2,49 @@ import { defineLogicFunction } from 'twenty-sdk/define';
 import { Response, kv, type RoutePayload } from 'twenty-sdk/logic-function';
 
 import { MEGAFON_WEBHOOK_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
-import { lookupClientByPhone, emptyLookup } from 'src/shared/megafon/crm-lookup';
-import { lookupEmployeeByOurNumber, emptyEmployee } from 'src/shared/megafon/employee-lookup';
+import { lookupClientByPhone, emptyLookup, type ClientLookup } from 'src/shared/megafon/crm-lookup';
+import { lookupEmployeeByOurNumber, emptyEmployee, type EmployeeLookup } from 'src/shared/megafon/employee-lookup';
 import { parseMegafonPayload } from 'src/shared/megafon/parse';
+import { registerCall, type RegisterResult } from 'src/shared/megafon/register-call';
 import { describeError } from 'src/shared/crm';
 
 /**
  * Приёмник вебхуков ВАТС МегаФон.
  *
- * Этап 1.1: разбор и маппинг. Приложение принимает боевой вебхук, разбирает его
- * в структуру карточки звонка и может показать результат в режиме сухого прогона
- * (`dry_run=1`) — без единой записи в CRM. Бизнес-логика (поиск клиента, компании,
- * сотрудника, создание звонка) появится следующими подшагами.
+ * Этап 1.4: по каждому хуку находим клиента по номеру, сотрудника по нашему номеру
+ * и ведём карточку звонка (запись звонка + событие календаря) строго по одному
+ * экземпляру на `callid`. Режим `dry_run=1` показывает разбор и поиск, но ничего
+ * не пишет в CRM — на нём гоняются сохранённые боевые тела.
  *
  * Наблюдение: console.log из логик-функции не виден в docker logs, поэтому
  * результаты пишем в kv-хранилище приложения — читается SQL-ом.
  */
+const emptyString = (v: unknown) => String(v ?? '');
+
 const handler = async (event: RoutePayload) => {
   const body = (event?.body ?? {}) as Record<string, unknown>;
   const parsed = parseMegafonPayload(body);
   const receivedAt = new Date().toISOString();
+  const errors: string[] = [];
 
-  const snapshot = {
-    receivedAt,
-    parsed,
-    contentType: event?.headers?.['content-type'] ?? null,
-    userAgent: event?.headers?.['user-agent'] ?? null,
-    body,
-    rawBody: event?.rawBody ?? null,
-  };
+  let lookup: ClientLookup = emptyLookup();
+  let employee: EmployeeLookup = emptyEmployee();
 
-  await kv.set('webhook:last', snapshot);
-  await kv.set(`webhook:last:${parsed.command}`, snapshot);
+  try {
+    lookup = await lookupClientByPhone(parsed.clientPhone);
+  } catch (error) {
+    errors.push(`клиент: ${describeError(error)}`);
+  }
 
-  // Сухой прогон: показываем, как разобран хук и кого нашли в CRM, ничего не записывая.
-  // Нужен для прогона сохранённых боевых тел (fixtures) через маршрут.
-  if (String(body.dry_run ?? '') === '1') {
-    let lookup = emptyLookup();
-    let employee = emptyEmployee();
-    let lookupError = '';
+  try {
+    employee = await lookupEmployeeByOurNumber(parsed.ourNumber);
+  } catch (error) {
+    errors.push(`сотрудник: ${describeError(error)}`);
+  }
 
-    try {
-      lookup = await lookupClientByPhone(parsed.clientPhone);
-    } catch (error) {
-      lookupError = describeError(error);
-    }
-
-    try {
-      employee = await lookupEmployeeByOurNumber(parsed.ourNumber);
-    } catch (error) {
-      lookupError = [lookupError, describeError(error)].filter(Boolean).join(' | ');
-    }
-
-    await kv.set('webhook:dry-run', { receivedAt, parsed, lookup, employee, lookupError });
+  // Сухой прогон: показываем разбор и результаты поиска, в CRM ничего не пишем.
+  if (emptyString(body.dry_run) === '1') {
+    await kv.set('webhook:dry-run', { receivedAt, parsed, lookup, employee, errors });
 
     return new Response(
       JSON.stringify({
@@ -63,13 +53,31 @@ const handler = async (event: RoutePayload) => {
         parsed,
         lookup,
         employee,
-        lookupError,
+        lookupError: errors.join(' | '),
       }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     );
   }
 
-  const answer = { source: 'megafon-telephony', cmd: parsed.command, ok: true, stored: true };
+  let result: RegisterResult | undefined;
+
+  try {
+    result = await registerCall(parsed, lookup);
+  } catch (error) {
+    errors.push(`звонок: ${describeError(error)}`);
+  }
+
+  const answer = {
+    source: 'megafon-telephony',
+    cmd: parsed.command,
+    ok: errors.length === 0,
+    action: result?.action ?? 'none',
+    callId: result?.callId ?? '',
+    title: result?.title ?? '',
+    errors,
+  };
+
+  await kv.set('webhook:last', { receivedAt, parsed, lookup, employee, answer, body });
 
   return new Response(JSON.stringify(answer), {
     status: 200,

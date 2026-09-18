@@ -11,8 +11,11 @@ import sys
 import urllib.parse
 import urllib.request
 
-URL = sys.argv[1] if len(sys.argv) > 1 else "https://crm.kplus79.ru/s/megafon"
+URL = next((a for a in sys.argv[1:] if not a.startswith("--")), "https://crm.kplus79.ru/s/megafon")
 FIXTURES = "fixtures/megafon-webhooks.json"
+
+# --write: боевой режим с записью в CRM, но под тестовым callid (боевые не трогаем)
+WRITE = "--write" in sys.argv
 
 # эталон старого воркфлоу → поля нашего разбора
 CHECKS = {
@@ -26,7 +29,10 @@ CHECKS = {
 
 def post(payload: dict) -> dict:
     data = dict(payload)
-    data["dry_run"] = "1"
+    if WRITE:
+        data["callid"] = "KPTEST-" + str(data.get("callid", ""))
+    else:
+        data["dry_run"] = "1"
     body = urllib.parse.urlencode(data).encode()
     req = urllib.request.Request(
         URL, data=body, headers={"Content-Type": "application/x-www-form-urlencoded"}
@@ -51,6 +57,17 @@ def main() -> int:
         lookup = answer.get("lookup", {}) or {}
         employee = answer.get("employee", {}) or {}
         lookup_error = answer.get("lookupError", "")
+
+        if WRITE:
+            errors = answer.get("errors") or []
+            print(
+                f"— {case['name']:26s} action={answer.get('action'):8s} "
+                f"callId={answer.get('callId') or '—'} title={answer.get('title') or '—'}"
+            )
+            if errors:
+                print(f"    ❌ {errors}")
+                failures += 1
+            continue
         client = lookup.get("personName") or (lookup.get("companyName") and f"[компания] {lookup['companyName']}") or "—"
         company = f" → {lookup['companyName']}" if lookup.get("companyId") else ""
         flags = " ⚠️неоднозначно" if lookup.get("ambiguous") else ""

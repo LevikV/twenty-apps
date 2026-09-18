@@ -137,7 +137,9 @@ export const parseMegafonPayload = (body: Record<string, unknown>): ParsedCall =
     recordingStatus: resolveRecordingStatus(command, body),
     clientPhone: normalizePhone(body.phone),
     clientPhoneRaw: String(body.phone ?? '').trim(),
-    ourNumber: normalizePhone(body.diversion ?? body.telnum),
+    // ВАТС: для звонка на общий номер `telnum` — номер ответившего сотрудника,
+    // а `diversion` — общий номер компании. Поэтому приоритет у `telnum`.
+    ourNumber: normalizePhone(body.telnum ?? body.diversion),
     extension: String(body.ext ?? '').trim(),
     user: String(body.user ?? '').trim(),
     startedAtIso,
