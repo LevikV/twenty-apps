@@ -2,105 +2,48 @@ import { defineLogicFunction } from 'twenty-sdk/define';
 import { Response, kv, type RoutePayload } from 'twenty-sdk/logic-function';
 
 import { MEGAFON_WEBHOOK_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
-import { createOne, describeError } from 'src/shared/crm';
+import { parseMegafonPayload } from 'src/shared/megafon/parse';
 
 /**
- * Приёмник вебхуков ВАТС МегаФон (этап 0 — разведка).
+ * Приёмник вебхуков ВАТС МегаФон.
  *
- * Задача этого шага: доказать, что приложение принимает боевой вебхук целиком
- * (urlencoded приходит распарсенным объектом), сохраняет его для разбора, может
- * вернуть свой HTTP-ответ и может писать записи в CRM.
- *
- * Бизнес-логика звонка (поиск клиента и компании, сотрудник, связи, лента)
- * появится на следующем этапе.
+ * Этап 1.1: разбор и маппинг. Приложение принимает боевой вебхук, разбирает его
+ * в структуру карточки звонка и может показать результат в режиме сухого прогона
+ * (`dry_run=1`) — без единой записи в CRM. Бизнес-логика (поиск клиента, компании,
+ * сотрудника, создание звонка) появится следующими подшагами.
  *
  * Наблюдение: console.log из логик-функции не виден в docker logs, поэтому
  * результаты пишем в kv-хранилище приложения — читается SQL-ом.
  */
 const handler = async (event: RoutePayload) => {
   const body = (event?.body ?? {}) as Record<string, unknown>;
-  const cmd = String(body.cmd ?? '');
-  const callid = String(body.callid ?? '');
+  const parsed = parseMegafonPayload(body);
+  const receivedAt = new Date().toISOString();
 
   const snapshot = {
-    receivedAt: new Date().toISOString(),
-    cmd,
-    callid,
-    type: String(body.type ?? ''),
-    status: String(body.status ?? ''),
-    phone: String(body.phone ?? ''),
-    user: String(body.user ?? ''),
-    ext: String(body.ext ?? ''),
-    duration: String(body.duration ?? ''),
-    keys: Object.keys(body),
+    receivedAt,
+    parsed,
     contentType: event?.headers?.['content-type'] ?? null,
     userAgent: event?.headers?.['user-agent'] ?? null,
-    http: event?.requestContext?.http ?? null,
     body,
     rawBody: event?.rawBody ?? null,
   };
 
   await kv.set('webhook:last', snapshot);
-  await kv.set(`webhook:last:${cmd || 'unknown'}`, snapshot);
-  await kv.set('webhook:counters', {
-    updatedAt: snapshot.receivedAt,
-    lastCmd: cmd,
-  });
+  await kv.set(`webhook:last:${parsed.command}`, snapshot);
 
-  // Пробная запись в CRM (только разведка, включается явным флагом test_write=1
-  // и тестовым callid). Нужна, чтобы проверить: REST из логик-функции создаёт
-  // событие календаря и запись звонка, несмотря на стоп-лист автоматизации.
-  if (String(body.test_write ?? '') === '1' && callid.startsWith('KPTEST')) {
-    const startedAt = new Date().toISOString();
-    const title = `📞 Тест приложения: ${String(body.phone ?? callid)}`;
+  // Сухой прогон: показываем, как разобран хук, и ничего не пишем в CRM.
+  // Нужен для прогона сохранённых боевых тел (fixtures) через маршрут.
+  if (String(body.dry_run ?? '') === '1') {
+    await kv.set('webhook:dry-run', { receivedAt, parsed });
 
-    let probe: Record<string, unknown>;
-
-    try {
-      const calendarEvent = await createOne('calendarEvents', 'calendarEvent', {
-        title,
-        startsAt: startedAt,
-        endsAt: startedAt,
-        isFullDay: false,
-        description: 'Пробная запись из приложения «Телефония МегаФон» (разведка)',
-      });
-
-      const callRecording = await createOne('callRecordings', 'callRecording', {
-        title,
-        status: 'NOT_RECORDED',
-        startedAt,
-        endedAt: startedAt,
-        calendarEventId: calendarEvent.id,
-        externalRecordingId: callid,
-      });
-
-      probe = {
-        ok: true,
-        command: cmd,
-        callid,
-        calendarEventId: calendarEvent.id,
-        callRecordingId: callRecording.id,
-      };
-    } catch (error) {
-      probe = {
-        ok: false,
-        command: cmd,
-        callid,
-        error: describeError(error),
-      };
-    }
-
-    await kv.set('webhook:probe', { at: new Date().toISOString(), ...probe });
-
-    return new Response(JSON.stringify({ source: 'megafon-telephony', ...probe }), {
+    return new Response(JSON.stringify({ source: 'megafon-telephony', dryRun: true, parsed }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
   }
 
-  // Хук contact — единственный, где ВАТС ждёт ответ от CRM (имя клиента + ответственный).
-  // Пока возвращаем технический ответ: проверяем, что наш HTTP-ответ вообще доходит.
-  const answer = { source: 'megafon-telephony', cmd, ok: true, stored: true };
+  const answer = { source: 'megafon-telephony', cmd: parsed.command, ok: true, stored: true };
 
   return new Response(JSON.stringify(answer), {
     status: 200,
