@@ -159,7 +159,12 @@ export const softDeleteOne = async (
   plural: string,
   id: string,
 ): Promise<void> => {
-  await client.delete(`/rest/${plural}/${id}`);
+  // Без soft_delete=true REST уходит в жёсткое удаление (destroy) — прав на него у приложения нет
+  await run(`DELETE /rest/${plural}/${id}`, () =>
+    client.delete(`/rest/${plural}/${id}`, {
+      query: { soft_delete: 'true' },
+    }),
+  );
 };
 
 export const pluralOf = (objectNameSingular: string): string => {

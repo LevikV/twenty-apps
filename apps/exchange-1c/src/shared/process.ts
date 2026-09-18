@@ -92,9 +92,17 @@ const processCompany = async (payload: CompanyPayload): Promise<ProcessOutcome> 
 
   if (existing?.id) {
     if (payload.deleted) {
+      const unlinked = await unlinkContactsOfOwner({
+        kind: 'company',
+        id: existing.id,
+      });
+
       await softDeleteOne('companies', existing.id);
 
-      return DONE;
+      return {
+        status: 'done',
+        note: `контрагент удалён, снято связей с контактными лицами: ${unlinked}`,
+      };
     }
 
     if (Object.keys(fields).length) {
@@ -103,7 +111,10 @@ const processCompany = async (payload: CompanyPayload): Promise<ProcessOutcome> 
 
     companyId = existing.id;
   } else if (payload.deleted) {
-    return DONE;
+    return {
+      status: 'done',
+      note: 'запись на удаление не найдена в CRM — удалять нечего',
+    };
   } else {
     const created = await createOne('companies', 'company', fields);
 
@@ -156,6 +167,44 @@ const processCompany = async (payload: CompanyPayload): Promise<ProcessOutcome> 
   return DONE;
 };
 
+/**
+ * Удаление владельца: связи «Контакт клиента» теряют смысл вместе с клиентом,
+ * а сами контактные лица остаются — они самостоятельные записи.
+ */
+const unlinkContactsOfOwner = async (owner: OwnerRef): Promise<number> => {
+  const filter =
+    owner.kind === 'company'
+      ? `klientCompanyId[eq]:${owner.id}`
+      : `klientPersonId[eq]:${owner.id}`;
+
+  const links = await findMany('kontaktyKlientov', filter, 200);
+  let removed = 0;
+
+  for (const link of links) {
+    await softDeleteOne('kontaktyKlientov', String(link.id));
+    removed += 1;
+  }
+
+  return removed;
+};
+
+/** Удаление контактного лица: его связи с клиентами снимаем. */
+const unlinkPersonLinks = async (personId: string): Promise<number> => {
+  const links = await findMany(
+    'kontaktyKlientov',
+    `kontaktnoeLicoId[eq]:${personId}`,
+    200,
+  );
+  let removed = 0;
+
+  for (const link of links) {
+    await softDeleteOne('kontaktyKlientov', String(link.id));
+    removed += 1;
+  }
+
+  return removed;
+};
+
 type PersonInput = {
   objectGuid: string;
   name?: string;
@@ -167,6 +216,7 @@ type PersonInput = {
   tipZapisi: string;
   payload: unknown;
   ownerGuid?: string;
+  deleted?: boolean;
 };
 
 const buildPersonFields = (input: PersonInput, merge?: PersonRecord) => {
@@ -204,6 +254,38 @@ const buildPersonFields = (input: PersonInput, merge?: PersonRecord) => {
 
 /** Человек: реестр -> склейка по телефону+ФИО -> создание; далее связь и реестр. */
 const processPerson = async (input: PersonInput): Promise<ProcessOutcome> => {
+  if (input.deleted) {
+    const row = await findPersonByReestr(input.objectGuid);
+
+    if (!row?.personId) {
+      return {
+        status: 'done',
+        note: 'запись на удаление не найдена в CRM — удалять нечего',
+      };
+    }
+
+    const linked = await findMany(
+      'reestrySopostavleniy',
+      `chelovekId[eq]:${row.personId}`,
+      5,
+    );
+    const unlinked = await unlinkPersonLinks(row.personId);
+
+    if (linked.length <= 1) {
+      await softDeleteOne('people', row.personId);
+
+      return {
+        status: 'done',
+        note: `карточка удалена, снято связей: ${unlinked}`,
+      };
+    }
+
+    return {
+      status: 'done',
+      note: `карточка склеена с другими записями 1С — не удалена, снято связей: ${unlinked}`,
+    };
+  }
+
   const byReestr = await findPersonByReestr(input.objectGuid);
 
   let personId: string;
@@ -290,9 +372,14 @@ const processContract = async (payload: ContractPayload): Promise<ProcessOutcome
   if (payload.deleted) {
     if (existing?.id) {
       await softDeleteOne('dogovora', String(existing.id));
+
+      return { status: 'done', note: 'договор удалён' };
     }
 
-    return DONE;
+    return {
+      status: 'done',
+      note: 'запись на удаление не найдена в CRM — удалять нечего',
+    };
   }
 
   const owner = await findOwner(payload.owner_guid);
@@ -331,6 +418,7 @@ const handleCompanyTask = async (task: QueueTask): Promise<ProcessOutcome> => {
       addresses: payload.addresses,
       tipZapisi: REESTR_TYPE.physicalPerson,
       payload,
+      deleted: payload.deleted,
     });
   }
 
@@ -353,17 +441,17 @@ const handleContactTask = async (task: QueueTask): Promise<ProcessOutcome> => {
   }
 
   if (payload.deleted) {
-    const linked = await findMany(
-      'reestrySopostavleniy',
-      `chelovekId[eq]:${byReestr?.personId ?? ''}`,
-      5,
-    );
-
-    if (byReestr?.personId && linked.length <= 1) {
-      await softDeleteOne('people', byReestr.personId);
-    }
-
-    return DONE;
+    return processPerson({
+      objectGuid: payload.guid,
+      name: payload.name,
+      comment: payload.comment,
+      phones: payload.phones,
+      emails: payload.emails,
+      tipZapisi: REESTR_TYPE.contactFace,
+      payload,
+      ownerGuid: payload.owner_guid,
+      deleted: true,
+    });
   }
 
   return processPerson({
@@ -405,15 +493,18 @@ export const processTask = async (task: QueueTask): Promise<ProcessOutcome> => {
   }
 
   if (task.objectType === 'person') {
+    const payload = task.payload as ContactPayload;
+
     return processPerson({
-      objectGuid: (task.payload as ContactPayload)?.guid,
-      name: (task.payload as ContactPayload)?.name,
-      comment: (task.payload as ContactPayload)?.comment,
-      phones: (task.payload as ContactPayload)?.phones,
-      emails: (task.payload as ContactPayload)?.emails,
+      objectGuid: payload?.guid,
+      name: payload?.name,
+      comment: payload?.comment,
+      phones: payload?.phones,
+      emails: payload?.emails,
       tipZapisi: REESTR_TYPE.contactFace,
-      payload,
-      ownerGuid: (task.payload as ContactPayload)?.owner_guid,
+      payload: task.payload,
+      ownerGuid: payload?.owner_guid,
+      deleted: payload?.deleted,
     });
   }
 
