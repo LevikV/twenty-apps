@@ -18,7 +18,13 @@ import { TIMELINE_ACTIVITY_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/cons
  * и кнопка, открывающая карточку записи звонка в боковой панели.
  */
 
-const client = new RestApiClient({ baseUrl: '' });
+/**
+ * Клиент работает от имени приложения: `runAs: 'application'` заставляет SDK
+ * взять адрес API и токен из окружения фронт-компонента (песочница подставляет
+ * `TWENTY_API_URL` и `TWENTY_APP_ACCESS_TOKEN`), а запросы к API проходят через
+ * мост хоста, который разрешает обращение к адресу приложения.
+ */
+const client = new RestApiClient({ runAs: 'application' });
 
 type TimelineRow = {
   linkedRecordId?: string | null;
