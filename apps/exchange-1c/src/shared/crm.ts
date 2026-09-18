@@ -27,30 +27,70 @@ const run = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
   }
 };
 
+const unwrap = (body: unknown): Record<string, unknown> =>
+  (body as { data?: Record<string, unknown> })?.data ?? {};
+
+const asRecord = (value: unknown): Record<string, unknown> | undefined => {
+  if (Array.isArray(value)) {
+    return (value[0] as Record<string, unknown>) ?? undefined;
+  }
+
+  if (value && typeof value === 'object') {
+    return value as Record<string, unknown>;
+  }
+
+  return undefined;
+};
+
+const capitalize = (value: string): string =>
+  value.charAt(0).toUpperCase() + value.slice(1);
+
+/** Ответы REST приходят как data.<plural> (список) или data.createX/updateX/deleteX (одна запись). */
 const pickList = (
   body: unknown,
   plural: string,
 ): Record<string, unknown>[] => {
-  const data = (body as { data?: Record<string, unknown> })?.data ?? {};
+  const data = unwrap(body);
+  const candidates: unknown[] = [
+    data[plural],
+    data[capitalize(plural)],
+    ...Object.values(data),
+  ];
 
-  const value = data[plural] ?? data[plural.charAt(0).toUpperCase() + plural.slice(1)];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate as Record<string, unknown>[];
+    }
+  }
 
-  return Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
+  const single = asRecord(data[plural]) ?? asRecord(Object.values(data)[0]);
+
+  return single ? [single] : [];
 };
 
 const pickOne = (
   body: unknown,
   singular: string,
 ): Record<string, unknown> | undefined => {
-  const data = (body as { data?: Record<string, unknown> })?.data ?? {};
+  const data = unwrap(body);
+  const pascal = capitalize(singular);
+  const candidates: unknown[] = [
+    data[singular],
+    data[`create${pascal}`],
+    data[`update${pascal}`],
+    data[`delete${pascal}`],
+    ...Object.values(data),
+  ];
 
-  const value = data[singular];
+  for (const candidate of candidates) {
+    const record = asRecord(candidate);
 
-  if (Array.isArray(value)) {
-    return value[0] as Record<string, unknown> | undefined;
+    if (record && typeof record.id === 'string') {
+      return record;
+    }
   }
 
-  return (value as Record<string, unknown> | undefined) ?? undefined;
+  return undefined;
 };
 
 export const findMany = async (
