@@ -5,7 +5,6 @@ import {
   openSidePanelPage,
   useTimelineActivityId,
 } from 'twenty-sdk/front-component';
-import { RestApiClient } from 'twenty-client-sdk/rest';
 
 import { TIMELINE_ACTIVITY_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 
@@ -13,18 +12,12 @@ import { TIMELINE_ACTIVITY_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/cons
  * Строка ленты для звонка МегаФон.
  *
  * Лента компании — единственное место, где запись пишет наше приложение (у контакта
- * её пишет ядро своим штатным типом). Своего рендера у приложения не было, поэтому
- * строка выглядела «пустой» и по ней не было перехода. Здесь: заголовок звонка
- * и кнопка, открывающая карточку записи звонка в боковой панели.
+ * её пишет ядро своим штатным типом). Компонент рисует заголовок звонка и по клику
+ * открывает карточку звонка в боковой панели.
+ *
+ * Данные берём из REST прямо из компонента: песочница фронт-компонента подставляет
+ * адрес API и токен приложения в окружение, а запросы к API идут через мост хоста.
  */
-
-/**
- * Клиент работает от имени приложения: `runAs: 'application'` заставляет SDK
- * взять адрес API и токен из окружения фронт-компонента (песочница подставляет
- * `TWENTY_API_URL` и `TWENTY_APP_ACCESS_TOKEN`), а запросы к API проходят через
- * мост хоста, который разрешает обращение к адресу приложения.
- */
-const client = new RestApiClient({ runAs: 'application' });
 
 type TimelineRow = {
   linkedRecordId?: string | null;
@@ -40,12 +33,38 @@ const CallTimelineRow = () => {
       return;
     }
 
-    client
-      .get<{ data: { timelineActivity: TimelineRow } }>(
-        `/rest/timelineActivities/${timelineActivityId}`,
-      )
-      .then((response) => setRow(response?.data?.timelineActivity ?? null))
+    const env =
+      (
+        globalThis as unknown as {
+          process?: { env?: Record<string, string | undefined> };
+        }
+      ).process?.env ?? {};
+    const base = (env.TWENTY_API_URL ?? '').replace(/\/+$/, '');
+    const token = env.TWENTY_APP_ACCESS_TOKEN ?? '';
+
+    if (!base) {
+      return;
+    }
+
+    let isRelevant = true;
+
+    fetch(`${base}/rest/timelineActivities/${timelineActivityId}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((json) => {
+        if (isRelevant) {
+          setRow(
+            (json as { data?: { timelineActivity?: TimelineRow } })?.data
+              ?.timelineActivity ?? null,
+          );
+        }
+      })
       .catch(() => setRow(null));
+
+    return () => {
+      isRelevant = false;
+    };
   }, [timelineActivityId]);
 
   const openCall = useCallback(() => {
@@ -60,8 +79,6 @@ const CallTimelineRow = () => {
     });
   }, [row]);
 
-  const title = row?.linkedRecordCachedName || 'Звонок';
-
   return (
     <div
       style={{
@@ -74,7 +91,7 @@ const CallTimelineRow = () => {
       }}
       onClick={openCall}
     >
-      <span>{title}</span>
+      <span>{row?.linkedRecordCachedName || 'Звонок'}</span>
       {row?.linkedRecordId ? (
         <span style={{ opacity: 0.6, textDecoration: 'underline' }}>
           открыть
