@@ -49,6 +49,7 @@ def main() -> int:
 
         parsed = answer.get("parsed", {})
         lookup = answer.get("lookup", {}) or {}
+        employee = answer.get("employee", {}) or {}
         lookup_error = answer.get("lookupError", "")
         client = lookup.get("personName") or (lookup.get("companyName") and f"[компания] {lookup['companyName']}") or "—"
         company = f" → {lookup['companyName']}" if lookup.get("companyId") else ""
@@ -63,6 +64,12 @@ def main() -> int:
         print(
             f"    клиент: {parsed.get('clientPhone') or '-'} → {client}{company} "
             f"[{lookup.get('companySource') or '—'}]{flags}{err}"
+        )
+        print(
+            f"    сотрудник: {parsed.get('ourNumber') or '-'} → "
+            f"{employee.get('employeeName') or '—'}"
+            f"{' (' + employee['positionName'] + ')' if employee.get('positionName') else ''} "
+            f"[{employee.get('source') or '—'}]"
         )
 
         expected = case.get("expectedOldWorkflow") or {}
@@ -81,6 +88,13 @@ def main() -> int:
                 failures += 1
             if not expected.get("companyFound") and lookup.get("companyId"):
                 print("    ＋ компания: находим там, где старый воркфлоу не нашёл")
+            if expected.get("employeeId") and expected["employeeId"] != employee.get("employeeId"):
+                print(
+                    f"    ❌ сотрудник: эталон {expected.get('employeeName')} "
+                    f"({expected['employeeId'][:8]}), наш {employee.get('employeeName') or '—'} "
+                    f"({(employee.get('employeeId') or '—')[:8]})"
+                )
+                failures += 1
 
         for old_field, new_field in CHECKS.items():
             # у хуков contact и event ВАТС не передаёт время начала — берём момент получения,

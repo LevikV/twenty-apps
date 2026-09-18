@@ -3,6 +3,7 @@ import { Response, kv, type RoutePayload } from 'twenty-sdk/logic-function';
 
 import { MEGAFON_WEBHOOK_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 import { lookupClientByPhone, emptyLookup } from 'src/shared/megafon/crm-lookup';
+import { lookupEmployeeByOurNumber, emptyEmployee } from 'src/shared/megafon/employee-lookup';
 import { parseMegafonPayload } from 'src/shared/megafon/parse';
 import { describeError } from 'src/shared/crm';
 
@@ -38,6 +39,7 @@ const handler = async (event: RoutePayload) => {
   // Нужен для прогона сохранённых боевых тел (fixtures) через маршрут.
   if (String(body.dry_run ?? '') === '1') {
     let lookup = emptyLookup();
+    let employee = emptyEmployee();
     let lookupError = '';
 
     try {
@@ -46,10 +48,23 @@ const handler = async (event: RoutePayload) => {
       lookupError = describeError(error);
     }
 
-    await kv.set('webhook:dry-run', { receivedAt, parsed, lookup, lookupError });
+    try {
+      employee = await lookupEmployeeByOurNumber(parsed.ourNumber);
+    } catch (error) {
+      lookupError = [lookupError, describeError(error)].filter(Boolean).join(' | ');
+    }
+
+    await kv.set('webhook:dry-run', { receivedAt, parsed, lookup, employee, lookupError });
 
     return new Response(
-      JSON.stringify({ source: 'megafon-telephony', dryRun: true, parsed, lookup, lookupError }),
+      JSON.stringify({
+        source: 'megafon-telephony',
+        dryRun: true,
+        parsed,
+        lookup,
+        employee,
+        lookupError,
+      }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     );
   }
