@@ -6,6 +6,7 @@ import { lookupClientByPhone, emptyLookup, type ClientLookup } from 'src/shared/
 import { lookupEmployeeByOurNumber, emptyEmployee, type EmployeeLookup } from 'src/shared/megafon/employee-lookup';
 import { parseMegafonPayload } from 'src/shared/megafon/parse';
 import { registerCall, type RegisterResult } from 'src/shared/megafon/register-call';
+import { writeWebhookLog } from 'src/shared/megafon/webhook-log';
 import { describeError } from 'src/shared/crm';
 
 /**
@@ -60,11 +61,27 @@ const handler = async (event: RoutePayload) => {
   }
 
   let result: RegisterResult | undefined;
+  let logId = '';
 
   try {
     result = await registerCall(parsed, lookup, employee);
   } catch (error) {
     errors.push(`звонок: ${describeError(error)}`);
+  }
+
+  // Диагностика (решение 1.0): пишем и в kv приложения, и в «Журнал вебхуков»,
+  // чтобы поток хуков был виден в интерфейсе CRM.
+  try {
+    logId = await writeWebhookLog({
+      parsed,
+      lookup,
+      employee,
+      title: result?.title ?? '',
+      rawBody: body,
+      receivedAt,
+    });
+  } catch (error) {
+    errors.push(`журнал: ${describeError(error)}`);
   }
 
   const answer = {
@@ -74,6 +91,7 @@ const handler = async (event: RoutePayload) => {
     action: result?.action ?? 'none',
     callId: result?.callId ?? '',
     title: result?.title ?? '',
+    logId,
     errors,
   };
 
