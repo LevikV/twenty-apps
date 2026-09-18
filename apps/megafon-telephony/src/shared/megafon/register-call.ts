@@ -54,6 +54,7 @@ export const registerCall = async (
 
     const links = await ensureCallLinks({
       calendarEventId: existing.calendarEventId,
+      callRecordingId: existing.id,
       lookup,
       employee,
       clientPhone: parsed.clientPhone,
@@ -76,6 +77,7 @@ export const registerCall = async (
   const call = await createCallRecording({ parsed, title, calendarEventId });
   const links = await ensureCallLinks({
     calendarEventId,
+    callRecordingId: call.id,
     lookup,
     employee,
     clientPhone: parsed.clientPhone,

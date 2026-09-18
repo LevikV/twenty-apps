@@ -44,3 +44,13 @@ export const COMPANY_OBJECT_UNIVERSAL_IDENTIFIER =
   '20202020-b374-4779-a561-80086cb2e17f';
 export const CALENDAR_EVENT_OBJECT_UNIVERSAL_IDENTIFIER =
   '20202020-8f1d-4eef-9f85-0d1965e27221';
+
+/**
+ * UID объекта «Записи звонков» (наш кастомный объект в этом воркспейсе).
+ *
+ * Связанной записью в ленте компании ставим сам звонок, а не событие календаря:
+ * так клик по строке ленты открывает карточку звонка (с записью, расшифровкой),
+ * а не пустое событие.
+ */
+export const CALL_RECORDING_OBJECT_UNIVERSAL_IDENTIFIER =
+  'ce19efb9-710f-45b2-b141-473abbeea60b';

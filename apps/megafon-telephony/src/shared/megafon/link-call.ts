@@ -2,7 +2,7 @@ import { RestApiClient } from 'twenty-client-sdk/rest';
 import { createTimelineActivity } from 'twenty-sdk/logic-function';
 
 import {
-  CALENDAR_EVENT_OBJECT_UNIVERSAL_IDENTIFIER,
+  CALL_RECORDING_OBJECT_UNIVERSAL_IDENTIFIER,
   COMPANY_OBJECT_UNIVERSAL_IDENTIFIER,
   TIMELINE_ACTIVITY_TYPE_UNIVERSAL_IDENTIFIER,
 } from 'src/constants/universal-identifiers';
@@ -38,18 +38,21 @@ type Row = {
 /**
  * Запись в ленте компании — штатным хелпером SDK: тип активности указывается
  * универсальным идентификатором, поэтому приложение остаётся переносимым.
- * Идемпотентность — по паре «событие + компания».
+ *
+ * Связанная запись — сам звонок (`callRecording`), а не событие календаря: так
+ * клик по строке ленты открывает карточку звонка. Идемпотентность — по паре
+ * «звонок + компания».
  */
 const addCompanyTimeline = async (params: {
-  calendarEventId: string;
+  callRecordingId: string;
   companyId: string;
   happensAt: string;
   title: string;
 }): Promise<boolean> => {
-  const { calendarEventId, companyId, happensAt, title } = params;
+  const { callRecordingId, companyId, happensAt, title } = params;
 
   const response = await client.get<unknown>('/rest/timelineActivities', {
-    query: { filter: `linkedRecordId[eq]:"${calendarEventId}"`, limit: 40 },
+    query: { filter: `linkedRecordId[eq]:"${callRecordingId}"`, limit: 40 },
   });
 
   const existing = rowsOf(response, 'timelineActivities');
@@ -60,8 +63,9 @@ const addCompanyTimeline = async (params: {
     timelineActivityTypeUniversalIdentifier: TIMELINE_ACTIVITY_TYPE_UNIVERSAL_IDENTIFIER,
     targetObjectUniversalIdentifier: COMPANY_OBJECT_UNIVERSAL_IDENTIFIER,
     targetRecordId: companyId,
-    linkedRecordId: calendarEventId,
-    linkedObjectMetadataUniversalIdentifier: CALENDAR_EVENT_OBJECT_UNIVERSAL_IDENTIFIER,
+    linkedRecordId: callRecordingId,
+    linkedObjectMetadataUniversalIdentifier:
+      CALL_RECORDING_OBJECT_UNIVERSAL_IDENTIFIER,
     happensAt,
     properties: {},
   });
@@ -102,6 +106,7 @@ const addParticipant = async (calendarEventId: string, body: Record<string, unkn
 
 export const ensureCallLinks = async (params: {
   calendarEventId: string;
+  callRecordingId: string;
   lookup: ClientLookup;
   employee: EmployeeLookup;
   clientPhone?: string;
@@ -110,6 +115,7 @@ export const ensureCallLinks = async (params: {
 }): Promise<LinkResult> => {
   const {
     calendarEventId,
+    callRecordingId,
     lookup,
     employee,
     clientPhone = '',
@@ -143,7 +149,7 @@ export const ensureCallLinks = async (params: {
   // лента компании: системный тип активности приложению недоступен, пишем своим
   if (lookup.companyId) {
     result.companyTimeline = await addCompanyTimeline({
-      calendarEventId,
+      callRecordingId,
       companyId: lookup.companyId,
       happensAt: happensAt || new Date().toISOString(),
       title,
