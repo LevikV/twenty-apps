@@ -48,14 +48,40 @@ def main() -> int:
             continue
 
         parsed = answer.get("parsed", {})
+        lookup = answer.get("lookup", {}) or {}
+        lookup_error = answer.get("lookupError", "")
+        client = lookup.get("personName") or (lookup.get("companyName") and f"[компания] {lookup['companyName']}") or "—"
+        company = f" → {lookup['companyName']}" if lookup.get("companyId") else ""
+        flags = " ⚠️неоднозначно" if lookup.get("ambiguous") else ""
+        err = f" ❌ошибка поиска: {lookup_error}" if lookup_error else ""
         print(
             f"— {case['name']:26s} cmd={parsed.get('command'):8s} stage={parsed.get('stage'):10s} "
             f"dir={parsed.get('direction') or '-':8s} итог={parsed.get('outcome') or '-':8s} "
             f"запись={parsed.get('recordingStatus'):13s} {parsed.get('startedAtIso') or '-'} → "
             f"{parsed.get('endedAtIso') or '-'} ({parsed.get('durationSeconds')} c)"
         )
+        print(
+            f"    клиент: {parsed.get('clientPhone') or '-'} → {client}{company} "
+            f"[{lookup.get('companySource') or '—'}]{flags}{err}"
+        )
 
         expected = case.get("expectedOldWorkflow") or {}
+
+        # сверка «кого нашли» со старым воркфлоу (сотрудника ищем на подшаге 1.3).
+        # Мы обязаны находить не хуже: если эталон нашёл, а мы нет — это регресс.
+        # Если нашли больше — это улучшение (старый воркфлоу искал компанию плохо).
+        if expected:
+            if expected.get("personFound") and not lookup.get("personId"):
+                print("    ❌ регресс: эталон нашёл клиента, мы нет")
+                failures += 1
+            if not expected.get("personFound") and lookup.get("personId"):
+                print("    ＋ клиент: находим там, где старый воркфлоу не нашёл")
+            if expected.get("companyFound") and not lookup.get("companyId"):
+                print("    ❌ регресс: эталон нашёл компанию, мы нет")
+                failures += 1
+            if not expected.get("companyFound") and lookup.get("companyId"):
+                print("    ＋ компания: находим там, где старый воркфлоу не нашёл")
+
         for old_field, new_field in CHECKS.items():
             # у хуков contact и event ВАТС не передаёт время начала — берём момент получения,
             # поэтому со эталоном старого воркфлоу время сверяем только у history

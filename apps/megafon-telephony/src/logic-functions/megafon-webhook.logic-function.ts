@@ -2,7 +2,9 @@ import { defineLogicFunction } from 'twenty-sdk/define';
 import { Response, kv, type RoutePayload } from 'twenty-sdk/logic-function';
 
 import { MEGAFON_WEBHOOK_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
+import { lookupClientByPhone, emptyLookup } from 'src/shared/megafon/crm-lookup';
 import { parseMegafonPayload } from 'src/shared/megafon/parse';
+import { describeError } from 'src/shared/crm';
 
 /**
  * Приёмник вебхуков ВАТС МегаФон.
@@ -32,15 +34,24 @@ const handler = async (event: RoutePayload) => {
   await kv.set('webhook:last', snapshot);
   await kv.set(`webhook:last:${parsed.command}`, snapshot);
 
-  // Сухой прогон: показываем, как разобран хук, и ничего не пишем в CRM.
+  // Сухой прогон: показываем, как разобран хук и кого нашли в CRM, ничего не записывая.
   // Нужен для прогона сохранённых боевых тел (fixtures) через маршрут.
   if (String(body.dry_run ?? '') === '1') {
-    await kv.set('webhook:dry-run', { receivedAt, parsed });
+    let lookup = emptyLookup();
+    let lookupError = '';
 
-    return new Response(JSON.stringify({ source: 'megafon-telephony', dryRun: true, parsed }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });
+    try {
+      lookup = await lookupClientByPhone(parsed.clientPhone);
+    } catch (error) {
+      lookupError = describeError(error);
+    }
+
+    await kv.set('webhook:dry-run', { receivedAt, parsed, lookup, lookupError });
+
+    return new Response(
+      JSON.stringify({ source: 'megafon-telephony', dryRun: true, parsed, lookup, lookupError }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
   }
 
   const answer = { source: 'megafon-telephony', cmd: parsed.command, ok: true, stored: true };
