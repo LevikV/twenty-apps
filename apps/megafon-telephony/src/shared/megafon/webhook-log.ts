@@ -56,6 +56,8 @@ export const writeWebhookLog = async (params: {
     cmd: parsed.command,
     istochnik: WEBHOOK_LOG_SOURCE,
     metod: 'POST',
+    uid: parsed.callid,
+    tipZvonka: parsed.direction,
     klyuchCrm: str(rawBody.crm_token),
     nashNomer: str(rawBody.telnum),
     ext: parsed.extension,
