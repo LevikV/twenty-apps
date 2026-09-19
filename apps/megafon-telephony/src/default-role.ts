@@ -13,4 +13,6 @@ export default defineApplicationRole({
   canUpdateAllObjectRecords: true,
   canSoftDeleteAllObjectRecords: true,
   canDestroyAllObjectRecords: false,
+  // UPLOAD_FILE — заливка mp3 в файловые поля записи звонка (конвейер записей).
+  permissionFlagUniversalIdentifiers: ['dc6931a9-44bd-5164-a983-3db5db837f54'],
 });
