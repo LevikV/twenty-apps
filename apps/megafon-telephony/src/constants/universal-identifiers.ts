@@ -15,6 +15,14 @@ export const HISTORY_BACKFILL_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
   'a7c2e4f1-3b8d-4f56-8e19-2d4a6c9b1f03';
 
 /**
+ * Диагностическая функция этапа 1 конвейера записей (проверка песочницы).
+ * Триггеров нет — вызывается вручную через CLI (`dev:function:exec`).
+ * После проверки удаляется.
+ */
+export const YANDEX_SELFTEST_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'dce657c1-7e82-4d7f-90f7-2b2d42b17c0c';
+
+/**
  * Свой тип активности приложения для ленты (timeline).
  *
  * Штатный системный тип `calendarEventLinked` приложению недоступен: ядро
