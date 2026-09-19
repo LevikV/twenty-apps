@@ -10,6 +10,10 @@ export const DEFAULT_ROLE_UNIVERSAL_IDENTIFIER =
 export const MEGAFON_WEBHOOK_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
   'e734332f-3e64-4a49-a9e3-bbc308f35a32';
 
+/** Логик-функция приведения истории звонков (связи и лента) — работает по расписанию. */
+export const HISTORY_BACKFILL_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'a7c2e4f1-3b8d-4f56-8e19-2d4a6c9b1f03';
+
 /**
  * Свой тип активности приложения для ленты (timeline).
  *
