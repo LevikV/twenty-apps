@@ -33,6 +33,7 @@ import {
 import {
   createPerson,
   findCandidateByPhoneAndName,
+  findPersonById,
   findPersonByObjectGuid,
   findPersonByReestr,
   updatePerson,
@@ -219,25 +220,66 @@ type PersonInput = {
   deleted?: boolean;
 };
 
-const buildPersonFields = (input: PersonInput, merge?: PersonRecord) => {
-  const phones = [...(input.phones ?? [])];
-  const emails = [...(input.emails ?? [])];
+/** Телефоны карточки: основной + дополнительные (в базе дополнительные бывают строкой JSON). */
+const phonesOfRecord = (record: PersonRecord): string[] => {
+  const out: string[] = [];
+  const primary = record.phones?.primaryPhoneNumber;
 
-  if (merge) {
-    const existing = normPhones(
-      merge.phones?.primaryPhoneNumber ? [merge.phones.primaryPhoneNumber] : [],
-    );
+  if (primary) {
+    out.push(primary);
+  }
 
-    if (existing?.primaryPhoneNumber) {
-      phones.push(existing.primaryPhoneNumber);
-    }
+  let extra: unknown = record.phones?.additionalPhones;
 
-    const existingEmail = merge.emails?.primaryEmail;
-
-    if (existingEmail) {
-      emails.push(existingEmail);
+  if (typeof extra === 'string') {
+    try {
+      extra = JSON.parse(extra);
+    } catch {
+      extra = [];
     }
   }
+
+  if (Array.isArray(extra)) {
+    for (const item of extra) {
+      const number =
+        item && typeof item === 'object'
+          ? (item as { number?: string }).number
+          : String(item ?? '');
+
+      if (number) {
+        out.push(number);
+      }
+    }
+  }
+
+  return out;
+};
+
+/** Почты карточки: основная + дополнительные. */
+const emailsOfRecord = (record: PersonRecord): string[] => {
+  const out: string[] = [];
+  const primary = record.emails?.primaryEmail;
+
+  if (primary) {
+    out.push(primary);
+  }
+
+  for (const mail of record.emails?.additionalEmails ?? []) {
+    if (mail) {
+      out.push(mail);
+    }
+  }
+
+  return out;
+};
+
+const buildPersonFields = (input: PersonInput, merge?: PersonRecord) => {
+  // Существующие телефоны и почты карточки идут первыми: основной номер не смещаем,
+  // а номера записи добавляются к ним (normPhones/normEmails сами убирают дубли).
+  const existingPhones = merge ? phonesOfRecord(merge) : [];
+  const existingEmails = merge ? emailsOfRecord(merge) : [];
+  const phones = [...existingPhones, ...(input.phones ?? [])];
+  const emails = [...existingEmails, ...(input.emails ?? [])];
 
   return personFields({
     // objectGuid ставим только своей карточке: у найденной по склейке он свой,
@@ -295,7 +337,9 @@ const processPerson = async (input: PersonInput): Promise<ProcessOutcome> => {
   if (byReestr?.personId) {
     personId = byReestr.personId;
     status = byReestr.reestr.status ?? REESTR_STATUS.main;
-    merge = (await findPersonByObjectGuid(input.objectGuid)) ?? undefined;
+    // У карточки бывает несколько записей 1С: читаем саму карточку,
+    // чтобы дополнить её поля, а не заменить полями одной записи
+    merge = (await findPersonById(personId)) ?? undefined;
   } else {
     // Карточка могла быть создана раньше, а строка реестра — не успеть (падение в прошлом прогоне)
     const byObjectGuid = await findPersonByObjectGuid(input.objectGuid);

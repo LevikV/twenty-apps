@@ -10,8 +10,8 @@ export type PersonRecord = {
   id: string;
   objectGuid?: string;
   name?: { firstName?: string; lastName?: string };
-  phones?: { primaryPhoneNumber?: string; additionalPhones?: string };
-  emails?: { primaryEmail?: string };
+  phones?: { primaryPhoneNumber?: string; additionalPhones?: string | { number?: string }[] };
+  emails?: { primaryEmail?: string; additionalEmails?: string[] };
 };
 
 const fullNameOf = (person: PersonRecord): string =>
@@ -121,6 +121,22 @@ export const findPersonByObjectGuid = async (
     'people',
     'person',
     `objectGuid[eq]:${objectGuid}`,
+  )) as unknown as PersonRecord | undefined;
+
+  return found?.id ? found : null;
+};
+
+/**
+ * Карточка по её id. Нужна, когда запись 1С нашлась в реестре: у карточки может
+ * быть несколько записей 1С, и тогда её поля надо не заменять, а дополнять.
+ */
+export const findPersonById = async (
+  id: string,
+): Promise<PersonRecord | null> => {
+  const found = (await findFirst(
+    'people',
+    'person',
+    `id[eq]:${id}`,
   )) as unknown as PersonRecord | undefined;
 
   return found?.id ? found : null;
