@@ -6,6 +6,7 @@ import { lookupClientByPhone, emptyLookup, type ClientLookup } from 'src/shared/
 import { lookupEmployeeByOurNumber, emptyEmployee, type EmployeeLookup } from 'src/shared/megafon/employee-lookup';
 import { parseMegafonPayload } from 'src/shared/megafon/parse';
 import { registerCall, type RegisterResult } from 'src/shared/megafon/register-call';
+import { ensureQueueTask, type QueueSeedResult } from 'src/shared/megafon/queue';
 import { writeWebhookLog } from 'src/shared/megafon/webhook-log';
 import { describeError } from 'src/shared/crm';
 
@@ -62,11 +63,26 @@ const handler = async (event: RoutePayload) => {
 
   let result: RegisterResult | undefined;
   let logId = '';
+  let queued: QueueSeedResult | '' = '';
 
   try {
     result = await registerCall(parsed, lookup, employee);
   } catch (error) {
     errors.push(`звонок: ${describeError(error)}`);
+  }
+
+  // Итог звонка со ссылкой на запись — ставим задачу в очередь расшифровки.
+  // Конвейер (cron) сам скачает mp3, зальёт его в карточку и расшифрует.
+  if (parsed.command === 'history' && parsed.recordingStatus === 'PROCESSING') {
+    queued = await ensureQueueTask({
+      uid: parsed.callid,
+      direction: parsed.direction === 'INCOMING' ? 'in' : 'out',
+      startedAt: parsed.startedAtIso,
+    });
+
+    if (queued === 'failed') {
+      errors.push('очередь: не удалось поставить задачу расшифровки');
+    }
   }
 
   // Диагностика (решение 1.0): пишем и в kv приложения, и в «Журнал вебхуков»,
@@ -91,6 +107,7 @@ const handler = async (event: RoutePayload) => {
     action: result?.action ?? 'none',
     callId: result?.callId ?? '',
     title: result?.title ?? '',
+    queued,
     logId,
     errors,
   };

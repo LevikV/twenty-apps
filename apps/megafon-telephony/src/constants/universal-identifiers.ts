@@ -22,6 +22,10 @@ export const RECORDING_QUEUE_TASK_UNIVERSAL_IDENTIFIER =
 export const RECORDING_PIPELINE_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
   'b7e4c2a8-6f13-4d59-8a72-9c5e1f0d3b64';
 
+/** Логик-функция сверки с ВАТС: дозаполнение пропущенных звонков и постановка в очередь. */
+export const RECORDING_RECONCILE_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'c51a7f39-2b84-4e16-9d07-8a3f6e5b2c48';
+
 /**
  * Свой тип активности приложения для ленты (timeline).
  *
