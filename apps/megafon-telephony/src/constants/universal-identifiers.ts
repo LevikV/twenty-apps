@@ -14,6 +14,14 @@ export const MEGAFON_WEBHOOK_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
 export const HISTORY_BACKFILL_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
   'a7c2e4f1-3b8d-4f56-8e19-2d4a6c9b1f03';
 
+/** Объект «Очередь расшифровки» — источник правды конвейера записей (этап 3). */
+export const RECORDING_QUEUE_TASK_UNIVERSAL_IDENTIFIER =
+  'a24da95a-6867-4571-b0d5-3758d2c62b33';
+
+/** Логик-функция конвейера записей: очередь → файл → Яндекс → расшифровка. */
+export const RECORDING_PIPELINE_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'b7e4c2a8-6f13-4d59-8a72-9c5e1f0d3b64';
+
 /**
  * Свой тип активности приложения для ленты (timeline).
  *
