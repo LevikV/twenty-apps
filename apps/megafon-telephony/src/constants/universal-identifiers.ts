@@ -15,13 +15,6 @@ export const HISTORY_BACKFILL_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
   'a7c2e4f1-3b8d-4f56-8e19-2d4a6c9b1f03';
 
 /**
- * Диагностическая функция этапа 2 конвейера (скачивание mp3 и заливка в карточку).
- * После проверки удаляется.
- */
-export const RECORDING_FILE_SELFTEST_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
-  'f3b7a1c2-8d64-4e05-9b2a-7c41d8e6b930';
-
-/**
  * Свой тип активности приложения для ленты (timeline).
  *
  * Штатный системный тип `calendarEventLinked` приложению недоступен: ядро
