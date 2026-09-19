@@ -28,7 +28,7 @@ const VIDEO_FIELD_UNIVERSAL_IDENTIFIER = 'bb9523d3-457e-4f4b-8c79-27a77afb87da';
 
 const MAX_ATTEMPTS = 10;
 const CHECK_AFTER_SECONDS = 60;
-const BATCH_SIZE = 5;
+const BATCH_SIZE = 10;
 
 type QueueTask = {
   id: string;
