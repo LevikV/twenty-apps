@@ -28,10 +28,10 @@ import { ensureCallLinks } from 'src/shared/megafon/link-call';
  * константой `MODE`: `dry` — только считаем, `live` — досоздаём связи.
  */
 
-const CONFIG: { mode: 'dry' | 'live' } = { mode: 'dry' };
+const CONFIG: { mode: 'dry' | 'live' } = { mode: 'live' };
 
 /** Размер порции: в сухом режиме только чтение, в боевом — с записью в CRM. */
-const PORTION = CONFIG.mode === 'live' ? 10 : 25;
+const PORTION = CONFIG.mode === 'live' ? 8 : 20;
 const PAUSE_MS = 400;
 const STATE_KEY = 'history:state';
 
@@ -76,22 +76,24 @@ const rowsOf = <T>(response: unknown, key: string): T[] => {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Следующая порция звонков после курсора (по времени создания). */
+/**
+ * Следующая порция звонков.
+ *
+ * Сортировка REST-выдачи стабильна только по `id`, поэтому идём по возрастанию
+ * `id` фильтром `id > курсор` — так ни одна запись не теряется, а размер порции
+ * совпадает с размером ответа.
+ */
 const readCalls = async (cursor: string): Promise<CallRow[]> => {
   const response = await client.get<unknown>('/rest/callRecordings', {
     query: {
-      filter: cursor ? `createdAt[gt]:"${cursor}"` : undefined,
-      limit: 60,
+      filter: cursor ? `id[gt]:"${cursor}"` : undefined,
+      limit: PORTION,
     },
   });
 
-  const calls = rowsOf<CallRow>(response, 'callRecordings');
-
-  return calls
-    .filter((call) => Boolean(call?.id))
-    .sort((left, right) =>
-      String(left.createdAt ?? '').localeCompare(String(right.createdAt ?? '')),
-    );
+  return rowsOf<CallRow>(response, 'callRecordings').filter((call) =>
+    Boolean(call?.id),
+  );
 };
 
 /** Телефон клиента и наш номер — из журнала вебхуков по UID звонка. */
@@ -159,13 +161,11 @@ const handler = async () => {
     return current;
   }
 
-  const portion = calls.slice(0, PORTION);
-
-  for (const call of portion) {
+  for (const call of calls) {
     const uid = String(call.externalRecordingId ?? '');
 
     current.processed += 1;
-    current.cursor = String(call.createdAt ?? current.cursor);
+    current.cursor = call.id;
 
     try {
       const { phone, ourNumber } = await readLogPhones(uid);
