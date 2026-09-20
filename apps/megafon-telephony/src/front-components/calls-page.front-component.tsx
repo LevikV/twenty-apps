@@ -120,26 +120,56 @@ const CallsPage = () => {
       }
 
       // 2. Роли и признак Admin
-      try {
-        const response = await api('/metadata', {
+      //
+      // Чтение ролей в Twenty закрыто правами: резолвер getRoles требует флаг ROLES,
+      // который есть у админа, но не у роли приложения. Поэтому сначала пробуем запрос
+      // от имени пользователя (cookie), и только потом — токеном приложения.
+      const rolesQuery = JSON.stringify({
+        query: '{ getRoles { id label workspaceMembers { id } } }',
+      });
+
+      const readRoles = async (withApplicationToken: boolean) => {
+        const response = await fetch(`${base}/metadata`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            query: '{ getRoles { id label workspaceMembers { id } } }',
-          }),
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(withApplicationToken && token
+              ? { Authorization: `Bearer ${token}` }
+              : {}),
+          },
+          body: rolesQuery,
         });
-        const json = (await response.json()) as {
-          data?: {
-            getRoles?: {
-              label: string;
-              workspaceMembers: { id: string }[];
-            }[];
-          };
+        const rawText = await response.text();
+        const parsed = (() => {
+          try {
+            return JSON.parse(rawText) as {
+              data?: {
+                getRoles?: { label: string; workspaceMembers: { id: string }[] }[];
+              };
+            };
+          } catch {
+            return null;
+          }
+        })();
+
+        return {
+          status: response.status,
+          rawText,
+          roles: parsed?.data?.getRoles ?? null,
         };
-        const roles = json?.data?.getRoles;
+      };
+
+      try {
+        const asUser = await readRoles(false);
+        const asApplication = asUser.roles ? null : await readRoles(true);
+        const roles = asUser.roles ?? asApplication?.roles ?? null;
 
         if (!roles) {
-          throw new Error(`роли не получены (HTTP ${response.status})`);
+          throw new Error(
+            `от имени пользователя: HTTP ${asUser.status}, ${asUser.rawText.slice(0, 200) || '(пусто)'}` +
+              `; токеном приложения: HTTP ${asApplication?.status ?? '—'}, ${(asApplication?.rawText ?? '—').slice(0, 200)}`,
+          );
         }
 
         const myRoles = roles
@@ -149,7 +179,7 @@ const CallsPage = () => {
           .map((role) => role.label);
 
         results.push({
-          title: 'Роли сотрудника (metadata API)',
+          title: `Роли сотрудника (${asUser.roles ? 'от имени пользователя' : 'токеном приложения'})`,
           ok: true,
           detail:
             myRoles.length > 0
