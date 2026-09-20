@@ -117,6 +117,21 @@ const directionLabel = (value: string | null) => {
   return DIRECTION_LABELS[value] ?? value.toLowerCase();
 };
 
+/** Единый вид номера: +7XXXXXXXXXX. */
+const normalizePhone = (raw: string) => {
+  const digits = raw.replace(/\D/g, '');
+
+  if (digits.length === 11 && (digits.startsWith('7') || digits.startsWith('8'))) {
+    return `+7${digits.slice(1)}`;
+  }
+
+  if (digits.length === 10) {
+    return `+7${digits}`;
+  }
+
+  return digits ? `+${digits}` : '';
+};
+
 const formatPhone = (
   phones?: {
     primaryPhoneNumber?: string | null;
@@ -129,14 +144,14 @@ const formatPhone = (
     return '';
   }
 
-  return `${phones?.primaryPhoneCallingCode ?? ''}${number}`;
+  return normalizePhone(`${phones?.primaryPhoneCallingCode ?? ''}${number}`);
 };
 
 /** Номер из заголовка звонка («📞 Входящий: 9620542184») — когда клиент ещё не сопоставлен. */
 const phoneFromTitle = (title: string | null) => {
   const match = title?.match(/\d[\d\s()-]{5,}\d/);
 
-  return match ? match[0].replace(/[^\d]/g, '') : '';
+  return match ? normalizePhone(match[0]) : '';
 };
 
 const CallsPage = () => {
@@ -499,7 +514,7 @@ const CallsPage = () => {
   const selectedMember = selectableMembers.find((member) => member.id === selectedId);
   const gridStyle = {
     display: 'grid',
-    gridTemplateColumns: '110px 96px minmax(0, 1.3fr) 130px 60px 92px 46px',
+    gridTemplateColumns: '110px 96px 130px minmax(0, 1.3fr) 60px 92px 46px',
     columnGap: '12px',
     rowGap: 0,
     alignItems: 'center',
@@ -565,8 +580,8 @@ const CallsPage = () => {
       >
         <span>Время</span>
         <span>Направление</span>
-        <span>Клиент</span>
         <span>Телефон</span>
+        <span>Клиент</span>
         <span>Длит.</span>
         <span>Итог</span>
         <span>Запись</span>
@@ -594,10 +609,10 @@ const CallsPage = () => {
         >
           <span>{formatDateTime(call.startedAt)}</span>
           <span>{directionLabel(call.direction)}</span>
+          <span>{call.personPhone || '—'}</span>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {[call.personName, call.companyName].filter(Boolean).join(' / ') || '—'}
           </span>
-          <span>{call.personPhone || '—'}</span>
           <span>{formatDuration(call.startedAt, call.endedAt)}</span>
           <span>{call.result ? RESULT_LABELS[call.result] ?? call.result : '—'}</span>
           <span>{call.audioUrl ? '🎧' : '—'}</span>
