@@ -89,6 +89,15 @@ export const CALLS_PAGE_LAYOUT_WIDGET_UNIVERSAL_IDENTIFIER =
 export const CALLS_NAVIGATION_MENU_ITEM_UNIVERSAL_IDENTIFIER =
   '54280dc9-9b64-41ef-a901-5e5397f8b1ce';
 
-/** Временный экран разведки в настройках приложения (удаляется после проверки). */
-export const SETTINGS_PROBE_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
-  'd739dfd7-a16d-44e8-8f56-992a87740386';
+/** Экран настроек приложения: доступ к журналу звонков (кто чьи звонки видит). */
+export const CALLS_ACCESS_SETTINGS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
+  '7b39ad25-666c-4ea4-918f-b36577855da5';
+
+/**
+ * Правила доступа к журналу звонков: хранятся в kv приложения,
+ * читаются и пишутся через эти два маршрута.
+ */
+export const CALL_JOURNAL_ACCESS_GET_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
+  '9ff0d80a-9f85-4e17-b27b-1582751ba3f9';
+export const CALL_JOURNAL_ACCESS_SAVE_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'eb6267d7-3ce2-41ca-9670-f4417f36e835';
