@@ -331,6 +331,7 @@ const CallsPage = () => {
           limit: String(PAGE_SIZE),
           select: 'id,title,startedAt,endedAt,napravlenie,itog,audio,calendarEventId',
           filter: `calendarEventId[in]:[${activeEventIds.join(',')}]`,
+          orderBy: '-startedAt',
         });
 
         if (cursor) {
