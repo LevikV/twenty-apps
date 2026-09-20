@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { defineFrontComponent } from 'twenty-sdk/define';
-import { useUserId } from 'twenty-sdk/front-component';
+import { SidePanelPages, openSidePanelPage, useUserId } from 'twenty-sdk/front-component';
 
 import { CALLS_PAGE_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 import {
@@ -127,6 +127,7 @@ const CallsPage = () => {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingCalls, setIsLoadingCalls] = useState(false);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [error, setError] = useState<string>('');
 
   const env = useMemo(() => readEnv(), []);
@@ -443,6 +444,14 @@ const CallsPage = () => {
     }
   }, [selectedId, loadCalls]);
 
+  const openCall = (recordId: string) => {
+    openSidePanelPage({
+      page: SidePanelPages.ViewRecord,
+      recordId,
+      objectNameSingular: 'callRecording',
+    }).catch((openError) => setError(describeError(openError)));
+  };
+
   if (isLoading) {
     return <div style={{ padding: '8px', fontSize: '13px' }}>Загружаем журнал…</div>;
   }
@@ -496,6 +505,10 @@ const CallsPage = () => {
         {error ? <span style={{ opacity: 0.95 }}>✗ {error}</span> : null}
       </div>
 
+      <div style={{ opacity: 0.6, fontSize: '12px' }}>
+        Нажмите на звонок — карточка откроется в панели справа.
+      </div>
+
       <div
         style={{
           ...gridStyle,
@@ -519,27 +532,27 @@ const CallsPage = () => {
       ) : null}
 
       {calls.map((call) => (
-        <div key={call.id} style={{ ...gridStyle, alignItems: 'center' }}>
+        <div
+          key={call.id}
+          onClick={() => openCall(call.id)}
+          onMouseEnter={() => setHoveredId(call.id)}
+          onMouseLeave={() => setHoveredId(null)}
+          title="Открыть карточку звонка"
+          style={{
+            ...gridStyle,
+            alignItems: 'center',
+            cursor: 'pointer',
+            borderRadius: '4px',
+            background: hoveredId === call.id ? 'rgba(128, 128, 128, 0.14)' : 'transparent',
+          }}
+        >
           <span>{formatDateTime(call.startedAt)}</span>
           <span>{directionLabel(call.direction)}</span>
           <span>{call.personName || call.title || '—'}</span>
           <span>{call.companyName || '—'}</span>
           <span>{formatDuration(call.startedAt, call.endedAt)}</span>
           <span>{call.result ? RESULT_LABELS[call.result] ?? call.result : '—'}</span>
-          <span>
-            {call.audioUrl ? (
-              <a
-                href={call.audioUrl}
-                target="_blank"
-                rel="noreferrer"
-                style={{ color: 'inherit' }}
-              >
-                🎧
-              </a>
-            ) : (
-              '—'
-            )}
-          </span>
+          <span>{call.audioUrl ? '🎧' : '—'}</span>
         </div>
       ))}
 
