@@ -39,6 +39,7 @@ type CallRow = {
   direction: string | null;
   result: string | null;
   personName: string;
+  personPhone: string;
   companyName: string;
   audioUrl: string | null;
 };
@@ -114,6 +115,28 @@ const directionLabel = (value: string | null) => {
   }
 
   return DIRECTION_LABELS[value] ?? value.toLowerCase();
+};
+
+const formatPhone = (
+  phones?: {
+    primaryPhoneNumber?: string | null;
+    primaryPhoneCallingCode?: string | null;
+  } | null,
+) => {
+  const number = phones?.primaryPhoneNumber ?? '';
+
+  if (!number) {
+    return '';
+  }
+
+  return `${phones?.primaryPhoneCallingCode ?? ''}${number}`;
+};
+
+/** Номер из заголовка звонка («📞 Входящий: 9620542184») — когда клиент ещё не сопоставлен. */
+const phoneFromTitle = (title: string | null) => {
+  const match = title?.match(/\d[\d\s()-]{5,}\d/);
+
+  return match ? match[0].replace(/[^\d]/g, '') : '';
 };
 
 const CallsPage = () => {
@@ -365,23 +388,29 @@ const CallsPage = () => {
 
         const personIds = [...new Set(Object.values(personByEvent))];
         const personNames: Record<string, string> = {};
+        const personPhones: Record<string, string> = {};
         const companyByPerson: Record<string, string> = {};
 
         if (personIds.length > 0) {
           const peopleParams = new URLSearchParams({
             filter: `id[in]:[${personIds.join(',')}]`,
             limit: String(PAGE_SIZE),
-            select: 'id,name,companyId',
+            select: 'id,name,companyId,phones',
           });
           const peopleResponse = await api(`/rest/people?${peopleParams.toString()}`);
           const peopleJson = (await peopleResponse.json()) as ApiList<{
             id: string;
             name?: { firstName?: string; lastName?: string } | null;
             companyId?: string | null;
+            phones?: {
+              primaryPhoneNumber?: string | null;
+              primaryPhoneCallingCode?: string | null;
+            } | null;
           }>;
 
           (peopleJson.data?.people ?? []).forEach((person) => {
             personNames[person.id] = fullName(person.name) || 'без имени';
+            personPhones[person.id] = formatPhone(person.phones);
 
             if (person.companyId) {
               companyByPerson[person.id] = person.companyId;
@@ -422,6 +451,9 @@ const CallsPage = () => {
             direction: record.napravlenie ?? null,
             result: record.itog ?? null,
             personName: personId ? personNames[personId] ?? '' : '',
+            personPhone: personId
+              ? personPhones[personId] || phoneFromTitle(record.title ?? null)
+              : phoneFromTitle(record.title ?? null),
             companyName: companyId ? companyNames[companyId] ?? '' : '',
             audioUrl: record.audio?.[0]?.url ?? null,
           };
@@ -467,12 +499,25 @@ const CallsPage = () => {
   const selectedMember = selectableMembers.find((member) => member.id === selectedId);
   const gridStyle = {
     display: 'grid',
-    gridTemplateColumns: '120px 100px 1fr 1fr 70px 1fr 60px',
-    gap: '8px',
+    gridTemplateColumns: '110px 96px minmax(0, 1.3fr) 130px 60px 92px 46px',
+    columnGap: '12px',
+    rowGap: 0,
+    alignItems: 'center',
+    width: '100%',
+    boxSizing: 'border-box',
   } as const;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '13px' }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '12px',
+        fontSize: '13px',
+        padding: '14px 18px 20px 18px',
+        boxSizing: 'border-box',
+      }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
         <span style={{ fontWeight: 600 }}>Сотрудник:</span>
 
@@ -515,13 +560,13 @@ const CallsPage = () => {
           fontWeight: 600,
           opacity: 0.7,
           borderBottom: '1px solid rgba(128, 128, 128, 0.35)',
-          paddingBottom: '6px',
+          padding: '0 10px 8px 10px',
         }}
       >
         <span>Время</span>
         <span>Направление</span>
         <span>Клиент</span>
-        <span>Компания</span>
+        <span>Телефон</span>
         <span>Длит.</span>
         <span>Итог</span>
         <span>Запись</span>
@@ -540,16 +585,19 @@ const CallsPage = () => {
           title="Открыть карточку звонка"
           style={{
             ...gridStyle,
-            alignItems: 'center',
             cursor: 'pointer',
+            padding: '7px 10px',
             borderRadius: '4px',
+            borderBottom: '1px solid rgba(128, 128, 128, 0.12)',
             background: hoveredId === call.id ? 'rgba(128, 128, 128, 0.14)' : 'transparent',
           }}
         >
           <span>{formatDateTime(call.startedAt)}</span>
           <span>{directionLabel(call.direction)}</span>
-          <span>{call.personName || call.title || '—'}</span>
-          <span>{call.companyName || '—'}</span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {[call.personName, call.companyName].filter(Boolean).join(' / ') || '—'}
+          </span>
+          <span>{call.personPhone || '—'}</span>
           <span>{formatDuration(call.startedAt, call.endedAt)}</span>
           <span>{call.result ? RESULT_LABELS[call.result] ?? call.result : '—'}</span>
           <span>{call.audioUrl ? '🎧' : '—'}</span>
