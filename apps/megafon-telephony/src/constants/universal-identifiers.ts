@@ -88,3 +88,7 @@ export const CALLS_PAGE_LAYOUT_WIDGET_UNIVERSAL_IDENTIFIER =
   '2b8f51ca-6aec-46cc-9672-a2faa8d237a3';
 export const CALLS_NAVIGATION_MENU_ITEM_UNIVERSAL_IDENTIFIER =
   '54280dc9-9b64-41ef-a901-5e5397f8b1ce';
+
+/** Временный экран разведки в настройках приложения (удаляется после проверки). */
+export const SETTINGS_PROBE_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
+  'd739dfd7-a16d-44e8-8f56-992a87740386';
