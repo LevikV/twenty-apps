@@ -70,3 +70,21 @@ export const CALENDAR_EVENT_OBJECT_UNIVERSAL_IDENTIFIER =
  */
 export const CALL_RECORDING_OBJECT_UNIVERSAL_IDENTIFIER =
   'ce19efb9-710f-45b2-b141-473abbeea60b';
+
+/**
+ * Экран «Звонки» (раздел в меню): страница, вкладка, виджет и сам компонент.
+ *
+ * Страница — тип STANDALONE_PAGE: рендерится внутри обычного лэйаута Twenty,
+ * значит левое меню остаётся. Заголовок страницы берётся из пункта навигации,
+ * поэтому название для пользователя задаётся в пункте меню, а не здесь.
+ */
+export const CALLS_PAGE_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
+  '96d523d1-9def-4617-b142-ea4ee420d404';
+export const CALLS_PAGE_LAYOUT_UNIVERSAL_IDENTIFIER =
+  '0217141f-4628-4c21-9a85-cc33df96f112';
+export const CALLS_PAGE_LAYOUT_TAB_UNIVERSAL_IDENTIFIER =
+  'dcad7175-2e9b-4af5-8c0d-0a13377c1c2f';
+export const CALLS_PAGE_LAYOUT_WIDGET_UNIVERSAL_IDENTIFIER =
+  '2b8f51ca-6aec-46cc-9672-a2faa8d237a3';
+export const CALLS_NAVIGATION_MENU_ITEM_UNIVERSAL_IDENTIFIER =
+  '54280dc9-9b64-41ef-a901-5e5397f8b1ce';
