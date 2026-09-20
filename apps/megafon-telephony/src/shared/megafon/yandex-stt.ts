@@ -188,15 +188,11 @@ const mergeEntry = (entries: TranscriptEntry[], name: string, words: TranscriptW
 /**
  * Сборка расшифровки из сырого ответа Яндекса.
  *
- * Роли по каналам (как в конвейере Ревизора): исходящий — канал 0 наш сотрудник,
- * канал 1 клиент; входящий — принадлежность канала не гарантирована, пишем «Канал N».
+ * Подписи — только «Канал N». ВАТС МегаФон не отдаёт, кто в каком канале, и
+ * угадывать по направлению звонка нельзя: клиент может ответить первым или вторым.
+ * Кто есть кто — задача анализатора, а не конвейера.
  */
-export const buildTranscript = (
-  raw: string,
-  direction: string,
-  clientLabel: string,
-  ourLabel: string,
-): TranscriptEntry[] => {
+export const buildTranscript = (raw: string): TranscriptEntry[] => {
   const entries: TranscriptEntry[] = [];
 
   for (const line of raw.split('\n')) {
@@ -234,14 +230,8 @@ export const buildTranscript = (
     if (words.length === 0) continue;
 
     const channel = String(final?.channelTag ?? '0');
-    const name =
-      direction === 'out'
-        ? channel === '0'
-          ? ourLabel
-          : clientLabel
-        : `Канал ${channel}`;
 
-    mergeEntry(entries, name, words);
+    mergeEntry(entries, `Канал ${channel}`, words);
   }
 
   return entries;

@@ -75,29 +75,6 @@ const findRecording = async (rest: RestApiClient, task: QueueTask): Promise<Reco
   return null;
 };
 
-/** Подписи ролей: имя клиента из заголовка, сотрудник — организатор события. */
-const resolveLabels = async (rest: RestApiClient, recording: Recording) => {
-  const clientLabel = (recording.title ?? '').split(': ')[1]?.trim() || 'Клиент';
-  let ourLabel = 'Сотрудник';
-
-  if (recording.calendarEventId) {
-    try {
-      const participants = (await rest.get(
-        `/rest/calendarEventParticipants?filter=calendarEventId[eq]:${recording.calendarEventId}&limit=20`,
-      )) as { data?: { calendarEventParticipants?: Array<{ displayName?: string; isOrganizer?: boolean }> } };
-      const organizer = participants.data?.calendarEventParticipants?.find(
-        (participant) => participant.isOrganizer && participant.displayName,
-      );
-
-      if (organizer?.displayName) ourLabel = organizer.displayName;
-    } catch {
-      // подпись по умолчанию — не повод ронять конвейер
-    }
-  }
-
-  return { clientLabel, ourLabel };
-};
-
 const patchTask = (rest: RestApiClient, taskId: string, data: Record<string, unknown>) =>
   rest.patch(`/rest/recordingQueueTasks/${taskId}`, data);
 
@@ -217,8 +194,7 @@ const handleSent = async (
     });
   }
 
-  const { clientLabel, ourLabel } = await resolveLabels(rest, recording);
-  const transcript = buildTranscript(raw, task.direction ?? 'in', clientLabel, ourLabel);
+  const transcript = buildTranscript(raw);
   const text = transcriptToText(transcript);
 
   await rest.patch(`/rest/callRecordings/${recording.id}`, {
