@@ -23,7 +23,7 @@ import {
 
 const ACCESS_PATH = '/call-journal-access';
 const PAGE_SIZE = 60;
-const MAX_MEMBER_PAGES = 4;
+const MAX_MEMBER_PAGES = 8;
 /** Сколько страниц максимум догружаем для связей события (участники, цели, люди, компании). */
 const MAX_PAGES = 5;
 
@@ -289,6 +289,38 @@ const CallsPage = () => {
       setError('');
 
       try {
+        // Хелпер: догружаем все страницы выборки (REST отдаёт максимум 60 за раз).
+        const fetchAll = async <T,>(
+          path: string,
+          base: Record<string, string>,
+          key: string,
+          maxPages = MAX_PAGES,
+        ): Promise<T[]> => {
+          const collected: T[] = [];
+          let after: string | null = null;
+
+          for (let page = 0; page < maxPages; page += 1) {
+            const params = new URLSearchParams({ ...base, limit: String(PAGE_SIZE) });
+
+            if (after) {
+              params.set('starting_after', after);
+            }
+
+            const response = await api(`${path}?${params.toString()}`);
+            const json = (await response.json()) as ApiList<T>;
+
+            collected.push(...(json.data?.[key] ?? []));
+
+            if (!json.pageInfo?.hasNextPage || !json.pageInfo.endCursor) {
+              break;
+            }
+
+            after = json.pageInfo.endCursor;
+          }
+
+          return collected;
+        };
+
         // 1. События сотрудника (страницами — у активных сотрудников больше 60).
         const collectedEventIds: string[] = [];
         const activeEventIds = cursor === null ? [] : eventIdsRef.current;
@@ -339,19 +371,10 @@ const CallsPage = () => {
           return;
         }
 
-        // 2. Звонки по событиям сотрудника.
-        const callParams = new URLSearchParams({
-          limit: String(PAGE_SIZE),
-          select: 'id,title,startedAt,endedAt,napravlenie,itog,audio,calendarEventId',
-          filter: `calendarEventId[in]:[${activeEventIds.join(',')}]`,
-        });
-
-        if (cursor) {
-          callParams.set('starting_after', cursor);
-        }
-
-        const callsResponse = await api(`/rest/callRecordings?${callParams.toString()}`);
-        const callsJson = (await callsResponse.json()) as ApiList<{
+        // 2. Звонки по событиям сотрудника. REST не сортирует выборку, когда фильтр идёт по связи,
+        // и свежий звонок запросто остаётся за первой страницей — поэтому забираем все страницы,
+        // а порядок задаём сами (см. сортировку ниже).
+        const records = await fetchAll<{
           id: string;
           title?: string | null;
           startedAt?: string | null;
@@ -359,17 +382,15 @@ const CallsPage = () => {
           napravlenie?: string | null;
           itog?: string | null;
           audio?: Array<{ fileId?: string; url?: string }> | null;
-        }> & { data?: { callRecordings?: unknown } };
-
-        const records = (callsJson.data?.callRecordings ?? []) as Array<{
-          id: string;
-          title?: string | null;
-          startedAt?: string | null;
-          endedAt?: string | null;
-          napravlenie?: string | null;
-          itog?: string | null;
-          audio?: Array<{ fileId?: string; url?: string }> | null;
-        }>;
+          calendarEventId?: string | null;
+        }>(
+          '/rest/callRecordings',
+          {
+            select: 'id,title,startedAt,endedAt,napravlenie,itog,audio,calendarEventId',
+            filter: `calendarEventId[in]:[${activeEventIds.join(',')}]`,
+          },
+          'callRecordings',
+        );
 
         if (records.length === 0) {
           setCalls((current) => (cursor === null ? [] : current));
@@ -391,37 +412,6 @@ const CallsPage = () => {
               .filter((value): value is string => Boolean(value)),
           ),
         ];
-        // Хелпер: догружаем все страницы выборки (REST отдаёт максимум 60 за раз).
-        const fetchAll = async <T,>(
-          path: string,
-          base: Record<string, string>,
-          key: string,
-        ): Promise<T[]> => {
-          const collected: T[] = [];
-          let after: string | null = null;
-
-          for (let page = 0; page < MAX_PAGES; page += 1) {
-            const params = new URLSearchParams({ ...base, limit: String(PAGE_SIZE) });
-
-            if (after) {
-              params.set('starting_after', after);
-            }
-
-            const response = await api(`${path}?${params.toString()}`);
-            const json = (await response.json()) as ApiList<T>;
-
-            collected.push(...(json.data?.[key] ?? []));
-
-            if (!json.pageInfo?.hasNextPage || !json.pageInfo.endCursor) {
-              break;
-            }
-
-            after = json.pageInfo.endCursor;
-          }
-
-          return collected;
-        };
-
         const personIdsByEvent: Record<string, string[]> = {};
         const memberNamesByEvent: Record<string, string[]> = {};
         const phoneByEvent: Record<string, string> = {};
@@ -699,7 +689,8 @@ const CallsPage = () => {
             (right.startedAt ?? '').localeCompare(left.startedAt ?? ''),
           );
         });
-        setNextCursor(callsJson.pageInfo?.hasNextPage ? callsJson.pageInfo.endCursor ?? null : null);
+        // Все звонки сотрудника уже загружены страницами — догружать нечего.
+        setNextCursor(null);
       } catch (loadError) {
         setError(describeError(loadError));
       } finally {
@@ -816,8 +807,8 @@ const CallsPage = () => {
       </div>
 
       <div style={{ opacity: 0.6, fontSize: '12px' }}>
-        Нажмите на звонок — карточка откроется в панели справа. Счётчики — по загруженным звонкам,
-        остальные догружаются кнопкой ниже.
+        Нажмите на звонок — карточка откроется в панели справа. Показаны все звонки сотрудника,
+        счётчики фильтров — по ним же.
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
