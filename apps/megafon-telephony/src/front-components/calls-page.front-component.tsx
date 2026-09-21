@@ -598,7 +598,9 @@ const CallsPage = () => {
             audioUrl: record.audio?.[0]?.url ?? null,
             hasClient: Boolean(personId || targetCompanyId),
             hasTarget,
-            isInternal: Boolean(internalName),
+            // Внутренний — только если клиента нет вовсе: в событиях бывают и клиент,
+            // и двое наших сотрудников (например, переадресация) — это не внутренний звонок.
+            isInternal: Boolean(internalName) && !personId && !targetCompanyId,
           };
         });
 
@@ -638,11 +640,12 @@ const CallsPage = () => {
   };
 
   // Фильтры контроля. Считаем по загруженным звонкам — список догружается кнопкой ниже.
+  // Внутренние звонки не считаем «мусором» для разбора — они не попадают в «нет клиента» / «нет цели».
   const filterCounts = useMemo(
     () => ({
       all: calls.length,
-      noClient: calls.filter((call) => !call.hasClient).length,
-      noTarget: calls.filter((call) => !call.hasTarget).length,
+      noClient: calls.filter((call) => !call.hasClient && !call.isInternal).length,
+      noTarget: calls.filter((call) => !call.hasTarget && !call.isInternal).length,
       internal: calls.filter((call) => call.isInternal).length,
     }),
     [calls],
@@ -651,9 +654,9 @@ const CallsPage = () => {
   const visibleCalls = useMemo(() => {
     switch (filter) {
       case 'noClient':
-        return calls.filter((call) => !call.hasClient);
+        return calls.filter((call) => !call.hasClient && !call.isInternal);
       case 'noTarget':
-        return calls.filter((call) => !call.hasTarget);
+        return calls.filter((call) => !call.hasTarget && !call.isInternal);
       case 'internal':
         return calls.filter((call) => call.isInternal);
       default:
