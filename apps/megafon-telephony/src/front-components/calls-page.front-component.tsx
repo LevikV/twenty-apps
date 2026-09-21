@@ -380,12 +380,13 @@ const CallsPage = () => {
         ];
         const personByEvent: Record<string, string> = {};
         const internalByEvent: Record<string, string> = {};
+        const phoneByEvent: Record<string, string> = {};
 
         if (callEventIds.length > 0) {
           const participantParams = new URLSearchParams({
             filter: `calendarEventId[in]:[${callEventIds.join(',')}]`,
             limit: String(PAGE_SIZE),
-            select: 'id,calendarEventId,personId,workspaceMemberId,displayName',
+            select: 'id,calendarEventId,personId,workspaceMemberId,displayName,handle',
           });
           const participantsResponse = await api(
             `/rest/calendarEventParticipants?${participantParams.toString()}`,
@@ -395,11 +396,16 @@ const CallsPage = () => {
             personId?: string | null;
             workspaceMemberId?: string | null;
             displayName?: string | null;
+            handle?: string | null;
           }>;
 
           (participantsJson.data?.calendarEventParticipants ?? []).forEach((participant) => {
             if (!participant.calendarEventId) {
               return;
+            }
+
+            if (participant.handle) {
+              phoneByEvent[participant.calendarEventId] = normalizePhone(participant.handle);
             }
 
             if (participant.personId) {
@@ -485,9 +491,10 @@ const CallsPage = () => {
               : internalName
                 ? `Внутренний: ${internalName}`
                 : '',
-            personPhone: personId
-              ? personPhones[personId] || phoneFromTitle(record.title ?? null)
-              : phoneFromTitle(record.title ?? null),
+            personPhone:
+              (personId ? personPhones[personId] : '') ||
+              (eventId ? phoneByEvent[eventId] : '') ||
+              phoneFromTitle(record.title ?? null),
             companyName: companyId ? companyNames[companyId] ?? '' : '',
             audioUrl: record.audio?.[0]?.url ?? null,
           };

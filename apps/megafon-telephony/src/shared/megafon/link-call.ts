@@ -187,6 +187,7 @@ export const ensureCallLinks = async (params: {
     await addParticipant(calendarEventId, {
       workspaceMemberId: lookup.internalEmployeeId,
       displayName: lookup.internalEmployeeName || '',
+      handle: clientPhone || '',
       responseStatus: 'ACCEPTED',
     });
     result.internalEmployeeParticipant = true;
