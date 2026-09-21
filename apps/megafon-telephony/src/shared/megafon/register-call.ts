@@ -24,9 +24,13 @@ export type RegisterResult = {
   reason?: string;
 };
 
-/** Кто в заголовке: имя клиента, иначе — номер. */
+/** Кто в заголовке: наш сотрудник (внутренний звонок), иначе клиент, иначе — номер. */
 const titleFor = (parsed: ParsedCall, lookup: ClientLookup): string => {
-  const who = lookup.personName || lookup.companyName || parsed.clientPhone;
+  const who =
+    lookup.internalEmployeeName ||
+    lookup.personName ||
+    lookup.companyName ||
+    parsed.clientPhone;
 
   return buildCallTitle(parsed.direction, who || 'неизвестный номер');
 };

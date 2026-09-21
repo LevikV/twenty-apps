@@ -331,7 +331,6 @@ const CallsPage = () => {
           limit: String(PAGE_SIZE),
           select: 'id,title,startedAt,endedAt,napravlenie,itog,audio,calendarEventId',
           filter: `calendarEventId[in]:[${activeEventIds.join(',')}]`,
-          orderBy: '-startedAt',
         });
 
         if (cursor) {
@@ -380,12 +379,13 @@ const CallsPage = () => {
           ),
         ];
         const personByEvent: Record<string, string> = {};
+        const internalByEvent: Record<string, string> = {};
 
         if (callEventIds.length > 0) {
           const participantParams = new URLSearchParams({
             filter: `calendarEventId[in]:[${callEventIds.join(',')}]`,
             limit: String(PAGE_SIZE),
-            select: 'id,calendarEventId,personId',
+            select: 'id,calendarEventId,personId,workspaceMemberId,displayName',
           });
           const participantsResponse = await api(
             `/rest/calendarEventParticipants?${participantParams.toString()}`,
@@ -393,11 +393,24 @@ const CallsPage = () => {
           const participantsJson = (await participantsResponse.json()) as ApiList<{
             calendarEventId?: string | null;
             personId?: string | null;
+            workspaceMemberId?: string | null;
+            displayName?: string | null;
           }>;
 
           (participantsJson.data?.calendarEventParticipants ?? []).forEach((participant) => {
-            if (participant.calendarEventId && participant.personId) {
+            if (!participant.calendarEventId) {
+              return;
+            }
+
+            if (participant.personId) {
               personByEvent[participant.calendarEventId] = participant.personId;
+            } else if (
+              participant.workspaceMemberId &&
+              participant.workspaceMemberId !== workspaceMemberId &&
+              participant.displayName
+            ) {
+              // вторая сторона — наш сотрудник: звонок внутренний
+              internalByEvent[participant.calendarEventId] = participant.displayName;
             }
           });
         }
@@ -458,6 +471,7 @@ const CallsPage = () => {
           const eventId = (record as { calendarEventId?: string | null }).calendarEventId ?? '';
           const personId = personByEvent[eventId] ?? '';
           const companyId = personId ? companyByPerson[personId] ?? '' : '';
+          const internalName = eventId ? internalByEvent[eventId] ?? '' : '';
 
           return {
             id: record.id,
@@ -466,7 +480,11 @@ const CallsPage = () => {
             title: record.title ?? null,
             direction: record.napravlenie ?? null,
             result: record.itog ?? null,
-            personName: personId ? personNames[personId] ?? '' : '',
+            personName: personId
+              ? personNames[personId] ?? ''
+              : internalName
+                ? `Внутренний: ${internalName}`
+                : '',
             personPhone: personId
               ? personPhones[personId] || phoneFromTitle(record.title ?? null)
               : phoneFromTitle(record.title ?? null),
@@ -475,7 +493,17 @@ const CallsPage = () => {
           };
         });
 
-        setCalls((current) => (cursor === null ? rows : [...current, ...rows]));
+        // API не сортирует выборку, когда фильтр идёт по связи (`calendarEventId[in]:`),
+        // поэтому порядок задаём сами: звонки — от новых к старым.
+        rows.sort((left, right) => (right.startedAt ?? '').localeCompare(left.startedAt ?? ''));
+
+        setCalls((current) => {
+          const merged = cursor === null ? rows : [...current, ...rows];
+
+          return [...merged].sort((left, right) =>
+            (right.startedAt ?? '').localeCompare(left.startedAt ?? ''),
+          );
+        });
         setNextCursor(callsJson.pageInfo?.hasNextPage ? callsJson.pageInfo.endCursor ?? null : null);
       } catch (loadError) {
         setError(describeError(loadError));

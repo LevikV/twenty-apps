@@ -25,6 +25,7 @@ export type LinkResult = {
   companyTarget: boolean;
   personParticipant: boolean;
   employeeParticipant: boolean;
+  internalEmployeeParticipant: boolean;
   companyTimeline: boolean;
 };
 
@@ -128,6 +129,7 @@ export const ensureCallLinks = async (params: {
     companyTarget: false,
     personParticipant: false,
     employeeParticipant: false,
+    internalEmployeeParticipant: false,
     companyTimeline: false,
   };
 
@@ -175,6 +177,19 @@ export const ensureCallLinks = async (params: {
       responseStatus: 'ACCEPTED',
     });
     result.employeeParticipant = true;
+  }
+
+  // внутренний звонок: вторая сторона — наш сотрудник, а не клиент
+  if (
+    lookup.internalEmployeeId &&
+    !participants.some((row) => row.workspaceMemberId === lookup.internalEmployeeId)
+  ) {
+    await addParticipant(calendarEventId, {
+      workspaceMemberId: lookup.internalEmployeeId,
+      displayName: lookup.internalEmployeeName || '',
+      responseStatus: 'ACCEPTED',
+    });
+    result.internalEmployeeParticipant = true;
   }
 
   return result;

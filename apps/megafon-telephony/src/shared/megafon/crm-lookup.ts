@@ -1,5 +1,7 @@
 import { RestApiClient } from 'twenty-client-sdk/rest';
 
+import { lookupEmployeeByOurNumber } from 'src/shared/megafon/employee-lookup';
+
 /**
  * Поиск клиента и компании по номеру телефона.
  *
@@ -36,6 +38,9 @@ export type ClientLookup = {
   companySource: 'kontakt-klienta' | 'company-phone' | '';
   /** Неоднозначность: найдено несколько контактов или несколько связей. */
   ambiguous: boolean;
+  /** Звонок внутри: вторая сторона — наш сотрудник (проверяем последней, после клиента и компании). */
+  internalEmployeeId: string;
+  internalEmployeeName: string;
 };
 
 export const emptyLookup = (): ClientLookup => ({
@@ -45,6 +50,8 @@ export const emptyLookup = (): ClientLookup => ({
   companyName: '',
   companySource: '',
   ambiguous: false,
+  internalEmployeeId: '',
+  internalEmployeeName: '',
 });
 
 /** ФИО в формате CRM: «Фамилия Имя Отчество». */
@@ -59,6 +66,22 @@ const dataOf = <T>(response: unknown, key: string): T[] => {
   const value = data?.[key];
 
   return Array.isArray(value) ? (value as T[]) : [];
+};
+
+/**
+ * Последняя проверка: вторая сторона — наш сотрудник (внутренний звонок).
+ * Делается только когда клиент и компания не нашлись: внутренних звонков мало,
+ * и незачем искать «наших» на каждом обычном звонке.
+ */
+const applyInternalFallback = async (result: ClientLookup, phone: string): Promise<void> => {
+  if (result.personId || result.companyId) return;
+
+  const employee = await lookupEmployeeByOurNumber(phone);
+
+  if (employee.employeeId) {
+    result.internalEmployeeId = employee.employeeId;
+    result.internalEmployeeName = employee.employeeName;
+  }
 };
 
 /** Контакт по номеру телефона (10 цифр). Несколько совпадений — считаем неоднозначностью. */
@@ -155,6 +178,8 @@ export const lookupClientByPhone = async (phone: string): Promise<ClientLookup> 
     }
     result.ambiguous = ambiguous;
 
+    await applyInternalFallback(result, phone);
+
     return result;
   }
 
@@ -183,6 +208,8 @@ export const lookupClientByPhone = async (phone: string): Promise<ClientLookup> 
     }
     result.ambiguous = fallback.ambiguous;
   }
+
+  await applyInternalFallback(result, phone);
 
   return result;
 };
