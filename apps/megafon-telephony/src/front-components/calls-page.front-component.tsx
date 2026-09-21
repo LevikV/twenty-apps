@@ -24,6 +24,8 @@ import {
 const ACCESS_PATH = '/call-journal-access';
 const PAGE_SIZE = 60;
 const MAX_MEMBER_PAGES = 4;
+/** Сколько страниц максимум догружаем для связей события (участники, цели, люди, компании). */
+const MAX_PAGES = 5;
 
 type MemberRow = {
   id: string;
@@ -42,7 +44,15 @@ type CallRow = {
   personPhone: string;
   companyName: string;
   audioUrl: string | null;
+  /** Номер сопоставлен с контактом или компанией. */
+  hasClient: boolean;
+  /** В событии есть хотя бы одна цель: человек, компания или сделка. */
+  hasTarget: boolean;
+  /** Вторая сторона — наш сотрудник (звонок внутри). */
+  isInternal: boolean;
 };
+
+type FilterKey = 'all' | 'noClient' | 'noTarget' | 'internal';
 
 type ApiList<T> = {
   data?: Record<string, T[] | undefined>;
@@ -166,6 +176,7 @@ const CallsPage = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingCalls, setIsLoadingCalls] = useState(false);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<FilterKey>('all');
   const [error, setError] = useState<string>('');
 
   const env = useMemo(() => readEnv(), []);
@@ -378,28 +389,61 @@ const CallsPage = () => {
               .filter((value): value is string => Boolean(value)),
           ),
         ];
+        // Хелпер: догружаем все страницы выборки (REST отдаёт максимум 60 за раз).
+        const fetchAll = async <T,>(
+          path: string,
+          base: Record<string, string>,
+          key: string,
+        ): Promise<T[]> => {
+          const collected: T[] = [];
+          let after: string | null = null;
+
+          for (let page = 0; page < MAX_PAGES; page += 1) {
+            const params = new URLSearchParams({ ...base, limit: String(PAGE_SIZE) });
+
+            if (after) {
+              params.set('starting_after', after);
+            }
+
+            const response = await api(`${path}?${params.toString()}`);
+            const json = (await response.json()) as ApiList<T>;
+
+            collected.push(...(json.data?.[key] ?? []));
+
+            if (!json.pageInfo?.hasNextPage || !json.pageInfo.endCursor) {
+              break;
+            }
+
+            after = json.pageInfo.endCursor;
+          }
+
+          return collected;
+        };
+
         const personByEvent: Record<string, string> = {};
         const internalByEvent: Record<string, string> = {};
         const phoneByEvent: Record<string, string> = {};
+        const targetPersonByEvent: Record<string, string> = {};
+        const targetCompanyByEvent: Record<string, string> = {};
+        const dealTargetByEvent: Record<string, boolean> = {};
 
         if (callEventIds.length > 0) {
-          const participantParams = new URLSearchParams({
-            filter: `calendarEventId[in]:[${callEventIds.join(',')}]`,
-            limit: String(PAGE_SIZE),
-            select: 'id,calendarEventId,personId,workspaceMemberId,displayName,handle',
-          });
-          const participantsResponse = await api(
-            `/rest/calendarEventParticipants?${participantParams.toString()}`,
-          );
-          const participantsJson = (await participantsResponse.json()) as ApiList<{
+          const participants = await fetchAll<{
             calendarEventId?: string | null;
             personId?: string | null;
             workspaceMemberId?: string | null;
             displayName?: string | null;
             handle?: string | null;
-          }>;
+          }>(
+            '/rest/calendarEventParticipants',
+            {
+              filter: `calendarEventId[in]:[${callEventIds.join(',')}]`,
+              select: 'id,calendarEventId,personId,workspaceMemberId,displayName,handle',
+            },
+            'calendarEventParticipants',
+          );
 
-          (participantsJson.data?.calendarEventParticipants ?? []).forEach((participant) => {
+          participants.forEach((participant) => {
             if (!participant.calendarEventId) {
               return;
             }
@@ -419,9 +463,55 @@ const CallsPage = () => {
               internalByEvent[participant.calendarEventId] = participant.displayName;
             }
           });
+
+          // Цели события: клиент может быть целью (компания без контакта), плюс сделки —
+          // наши (Ремонт / Заправка / Тендер) и стандартная сделка.
+          const targets = await fetchAll<{
+            calendarEventId?: string | null;
+            targetPersonId?: string | null;
+            targetCompanyId?: string | null;
+            targetOpportunityId?: string | null;
+            nashaSdelkaRemontOborudovaniyaId?: string | null;
+            nashaSdelkaZapravkaKartridzheyId?: string | null;
+            nashaSdelkaTenderId?: string | null;
+          }>(
+            '/rest/calendarEventTargets',
+            {
+              filter: `calendarEventId[in]:[${callEventIds.join(',')}]`,
+              select:
+                'id,calendarEventId,targetPersonId,targetCompanyId,targetOpportunityId,' +
+                'nashaSdelkaRemontOborudovaniyaId,nashaSdelkaZapravkaKartridzheyId,nashaSdelkaTenderId',
+            },
+            'calendarEventTargets',
+          );
+
+          targets.forEach((target) => {
+            if (!target.calendarEventId) {
+              return;
+            }
+
+            if (target.targetPersonId) {
+              targetPersonByEvent[target.calendarEventId] = target.targetPersonId;
+            }
+
+            if (target.targetCompanyId) {
+              targetCompanyByEvent[target.calendarEventId] = target.targetCompanyId;
+            }
+
+            if (
+              target.targetOpportunityId ||
+              target.nashaSdelkaRemontOborudovaniyaId ||
+              target.nashaSdelkaZapravkaKartridzheyId ||
+              target.nashaSdelkaTenderId
+            ) {
+              dealTargetByEvent[target.calendarEventId] = true;
+            }
+          });
         }
 
-        const personIds = [...new Set(Object.values(personByEvent))];
+        const personIds = [
+          ...new Set([...Object.values(personByEvent), ...Object.values(targetPersonByEvent)]),
+        ];
         const personNames: Record<string, string> = {};
         const personPhones: Record<string, string> = {};
         const companyByPerson: Record<string, string> = {};
@@ -453,7 +543,9 @@ const CallsPage = () => {
           });
         }
 
-        const companyIds = [...new Set(Object.values(companyByPerson))];
+        const companyIds = [
+          ...new Set([...Object.values(companyByPerson), ...Object.values(targetCompanyByEvent)]),
+        ];
         const companyNames: Record<string, string> = {};
 
         if (companyIds.length > 0) {
@@ -475,9 +567,14 @@ const CallsPage = () => {
 
         const rows: CallRow[] = records.map((record) => {
           const eventId = (record as { calendarEventId?: string | null }).calendarEventId ?? '';
-          const personId = personByEvent[eventId] ?? '';
+          const personId = personByEvent[eventId] ?? targetPersonByEvent[eventId] ?? '';
           const companyId = personId ? companyByPerson[personId] ?? '' : '';
+          const targetCompanyId = eventId ? targetCompanyByEvent[eventId] ?? '' : '';
           const internalName = eventId ? internalByEvent[eventId] ?? '' : '';
+          const hasTarget = Boolean(
+            eventId &&
+              (targetPersonByEvent[eventId] || targetCompanyId || dealTargetByEvent[eventId]),
+          );
 
           return {
             id: record.id,
@@ -495,8 +592,13 @@ const CallsPage = () => {
               (personId ? personPhones[personId] : '') ||
               (eventId ? phoneByEvent[eventId] : '') ||
               phoneFromTitle(record.title ?? null),
-            companyName: companyId ? companyNames[companyId] ?? '' : '',
+            companyName:
+              (companyId ? companyNames[companyId] ?? '' : '') ||
+              (targetCompanyId ? companyNames[targetCompanyId] ?? '' : ''),
             audioUrl: record.audio?.[0]?.url ?? null,
+            hasClient: Boolean(personId || targetCompanyId),
+            hasTarget,
+            isInternal: Boolean(internalName),
           };
         });
 
@@ -534,6 +636,30 @@ const CallsPage = () => {
       objectNameSingular: 'callRecording',
     }).catch((openError) => setError(describeError(openError)));
   };
+
+  // Фильтры контроля. Считаем по загруженным звонкам — список догружается кнопкой ниже.
+  const filterCounts = useMemo(
+    () => ({
+      all: calls.length,
+      noClient: calls.filter((call) => !call.hasClient).length,
+      noTarget: calls.filter((call) => !call.hasTarget).length,
+      internal: calls.filter((call) => call.isInternal).length,
+    }),
+    [calls],
+  );
+
+  const visibleCalls = useMemo(() => {
+    switch (filter) {
+      case 'noClient':
+        return calls.filter((call) => !call.hasClient);
+      case 'noTarget':
+        return calls.filter((call) => !call.hasTarget);
+      case 'internal':
+        return calls.filter((call) => call.isInternal);
+      default:
+        return calls;
+    }
+  }, [calls, filter]);
 
   if (isLoading) {
     return <div style={{ padding: '8px', fontSize: '13px' }}>Загружаем журнал…</div>;
@@ -602,7 +728,43 @@ const CallsPage = () => {
       </div>
 
       <div style={{ opacity: 0.6, fontSize: '12px' }}>
-        Нажмите на звонок — карточка откроется в панели справа.
+        Нажмите на звонок — карточка откроется в панели справа. Счётчики — по загруженным звонкам,
+        остальные догружаются кнопкой ниже.
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+        {(
+          [
+            ['all', 'Все'],
+            ['noClient', 'Нет клиента'],
+            ['noTarget', 'Нет цели'],
+            ['internal', 'Внутренние'],
+          ] as [FilterKey, string][]
+        ).map(([key, label]) => {
+          const isActive = filter === key;
+
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setFilter(key)}
+              style={{
+                padding: '4px 12px',
+                borderRadius: '999px',
+                border: `1px solid ${
+                  isActive ? 'rgba(128, 128, 128, 0.75)' : 'rgba(128, 128, 128, 0.35)'
+                }`,
+                background: isActive ? 'rgba(128, 128, 128, 0.22)' : 'transparent',
+                color: 'inherit',
+                cursor: 'pointer',
+                fontSize: '12.5px',
+                fontWeight: isActive ? 600 : 400,
+              }}
+            >
+              {label} ({filterCounts[key]})
+            </button>
+          );
+        })}
       </div>
 
       <div
@@ -623,11 +785,11 @@ const CallsPage = () => {
         <span>Запись</span>
       </div>
 
-      {calls.length === 0 && !isLoadingCalls ? (
+      {visibleCalls.length === 0 && !isLoadingCalls ? (
         <div style={{ opacity: 0.75 }}>Звонков не найдено</div>
       ) : null}
 
-      {calls.map((call) => (
+      {visibleCalls.map((call) => (
         <div
           key={call.id}
           onClick={() => openCall(call.id)}

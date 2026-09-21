@@ -66,6 +66,15 @@ export const REMONT_OBORUDOVANIYA_OBJECT_UNIVERSAL_IDENTIFIER =
   'f3353335-2e24-436e-98f6-9e3c5bf3d5d2';
 export const ZAPRAVKA_KARTRIDZHEY_OBJECT_UNIVERSAL_IDENTIFIER =
   '3428a13d-eb18-4c42-bb46-50f63d2f90cd';
+export const TENDER_OBJECT_UNIVERSAL_IDENTIFIER =
+  '436cef8d-e02c-4a77-bb23-aeeb68037c09';
+
+/** Объект «Цели события» — в него добавляем наши сделки как ещё один вид цели. */
+export const CALENDAR_EVENT_TARGET_OBJECT_UNIVERSAL_IDENTIFIER =
+  '6a9b9656-3e23-4234-94a4-b913c5dde668';
+
+/** Признак штатной морф-группы целей (человек / компания / сделка) — наши поля входят в неё же. */
+export const CALENDAR_EVENT_TARGETS_MORPH_ID = '676e9f68-7b5c-41e6-b46d-2fb9527b7051';
 
 /**
  * UID объекта «Записи звонков» (наш кастомный объект в этом воркспейсе).
