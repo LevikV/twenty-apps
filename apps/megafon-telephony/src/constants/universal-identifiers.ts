@@ -61,6 +61,12 @@ export const COMPANY_OBJECT_UNIVERSAL_IDENTIFIER =
 export const CALENDAR_EVENT_OBJECT_UNIVERSAL_IDENTIFIER =
   '20202020-8f1d-4eef-9f85-0d1965e27221';
 
+/** Наши объекты-сделки: пробуем связать событие с ними морф-связью (обход: Opportunity недоступен). */
+export const REMONT_OBORUDOVANIYA_OBJECT_UNIVERSAL_IDENTIFIER =
+  'f3353335-2e24-436e-98f6-9e3c5bf3d5d2';
+export const ZAPRAVKA_KARTRIDZHEY_OBJECT_UNIVERSAL_IDENTIFIER =
+  '3428a13d-eb18-4c42-bb46-50f63d2f90cd';
+
 /**
  * UID объекта «Записи звонков» (наш кастомный объект в этом воркспейсе).
  *
