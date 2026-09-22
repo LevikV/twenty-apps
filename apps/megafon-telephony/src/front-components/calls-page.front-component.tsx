@@ -176,6 +176,8 @@ const CallsPage = () => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [calls, setCalls] = useState<CallRow[]>([]);
   const eventIdsRef = useRef<string[]>([]);
+  /** Наши рабочие и личные номера — по ним отличаем внутренний звонок от неразобранного. */
+  const ownNumbersRef = useRef<Set<string> | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingCalls, setIsLoadingCalls] = useState(false);
@@ -348,6 +350,47 @@ const CallsPage = () => {
 
           return (json.data ?? {}) as T;
         };
+
+        // Наши номера: рабочие (из должностей) и личные (из карточек сотрудников).
+        // Внутренний звонок — только когда вторая сторона звонила с одного из них.
+        if (!ownNumbersRef.current) {
+          const ownNumbers = new Set<string>();
+
+          try {
+            const [positions, staff] = await Promise.all([
+              fetchAll<{ workPhonePrimaryPhoneNumber?: string | null }>(
+                '/rest/positions',
+                { select: 'id,workPhonePrimaryPhoneNumber' },
+                'positions',
+              ),
+              fetchAll<{ telefonPrimaryPhoneNumber?: string | null }>(
+                '/rest/workspaceMembers',
+                { select: 'id,telefonPrimaryPhoneNumber' },
+                'workspaceMembers',
+              ),
+            ]);
+
+            positions.forEach((position) => {
+              const number = normalizePhone(position.workPhonePrimaryPhoneNumber ?? '');
+
+              if (number) {
+                ownNumbers.add(number);
+              }
+            });
+
+            staff.forEach((member) => {
+              const number = normalizePhone(member.telefonPrimaryPhoneNumber ?? '');
+
+              if (number) {
+                ownNumbers.add(number);
+              }
+            });
+          } catch {
+            // без списка номеров внутренние просто не определим — журнал не ломаем
+          }
+
+          ownNumbersRef.current = ownNumbers;
+        }
 
         // 1. Свежие события сотрудника. GraphQL сортирует на сервере (REST при фильтре
         // по связи порядок игнорирует), поэтому берём только последние события —
@@ -703,13 +746,17 @@ const CallsPage = () => {
           const participantCompanyIds = eventId
             ? participantCompanyIdsByEvent[eventId] ?? []
             : [];
+          const callNumber = phoneFromTitle(record.title ?? null);
+          // Внутренний — только если вторая сторона звонила с нашего же номера: ВАТС нередко
+          // добавляет второго сотрудника и в клиентские звонки (переадресация) — это не внутренний.
+          const isOwnNumber = Boolean(callNumber) && Boolean(ownNumbersRef.current?.has(callNumber));
 
           // Колонка «Клиент» — только участники события, кроме нашего сотрудника, чью запись
           // смотрим: контакт, компания (номер компании) или коллега. Цели сюда не попадают.
           const clientParts = [
             ...personIds.map((id) => personNames[id] ?? '').filter(Boolean),
             ...participantCompanyIds.map((id) => companyNames[id] ?? '').filter(Boolean),
-            ...memberNames.map((name) => `Коллега: ${name}`),
+            ...(isOwnNumber ? memberNames.map((name) => `Коллега: ${name}`) : []),
           ];
 
           // Колонка «Цель» — к чему отнесён звонок: человек, компания или сделка.
@@ -739,7 +786,7 @@ const CallsPage = () => {
             audioUrl: record.audio?.[0]?.url ?? null,
             hasClient: personIds.length > 0 || participantCompanyIds.length > 0,
             hasTarget: targetParts.length > 0,
-            isInternal: personIds.length === 0 && memberNames.length > 0,
+            isInternal: personIds.length === 0 && participantCompanyIds.length === 0 && isOwnNumber,
           };
         });
 
