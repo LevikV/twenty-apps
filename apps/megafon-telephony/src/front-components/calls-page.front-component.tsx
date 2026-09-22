@@ -358,20 +358,20 @@ const CallsPage = () => {
 
           try {
             const [positions, staff] = await Promise.all([
-              fetchAll<{ workPhonePrimaryPhoneNumber?: string | null }>(
+              fetchAll<{ workPhone?: { primaryPhoneNumber?: string | null } | null }>(
                 '/rest/positions',
-                { select: 'id,workPhonePrimaryPhoneNumber' },
+                { select: 'id,workPhone' },
                 'positions',
               ),
-              fetchAll<{ telefonPrimaryPhoneNumber?: string | null }>(
+              fetchAll<{ telefon?: { primaryPhoneNumber?: string | null } | null }>(
                 '/rest/workspaceMembers',
-                { select: 'id,telefonPrimaryPhoneNumber' },
+                { select: 'id,telefon' },
                 'workspaceMembers',
               ),
             ]);
 
             positions.forEach((position) => {
-              const number = normalizePhone(position.workPhonePrimaryPhoneNumber ?? '');
+              const number = normalizePhone(position.workPhone?.primaryPhoneNumber ?? '');
 
               if (number) {
                 ownNumbers.add(number);
@@ -379,7 +379,7 @@ const CallsPage = () => {
             });
 
             staff.forEach((member) => {
-              const number = normalizePhone(member.telefonPrimaryPhoneNumber ?? '');
+              const number = normalizePhone(member.telefon?.primaryPhoneNumber ?? '');
 
               if (number) {
                 ownNumbers.add(number);
