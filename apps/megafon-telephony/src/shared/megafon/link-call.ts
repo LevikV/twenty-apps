@@ -40,10 +40,13 @@ export type LinkResult = {
   companyParticipant: boolean;
   employeeParticipant: boolean;
   internalEmployeeParticipant: boolean;
+  /** Сколько «лишних» участников-сотрудников убрали на итоговом хуке. */
+  removedEmployees: number;
   companyTimeline: boolean;
 };
 
 type Row = {
+  id?: string | null;
   targetPersonId?: string | null;
   targetCompanyId?: string | null;
   targetOpportunityId?: string | null;
@@ -124,6 +127,31 @@ const addTarget = async (calendarEventId: string, body: Record<string, unknown>)
 const addParticipant = async (calendarEventId: string, body: Record<string, unknown>) =>
   client.post('/rest/calendarEventParticipants', { calendarEventId, ...body });
 
+/**
+ * Итоговый хук: если разговор состоялся, участником-сотрудником оставляем только
+ * того, кто ответил, — остальных (кому звонило на групповом номере) убираем.
+ * Если никто не ответил, список не трогаем: пропущенный звонок должен быть виден
+ * у каждого, кому звонило (решение Алексея 22.09.2026).
+ */
+const removeOtherEmployees = async (
+  calendarEventId: string,
+  keepMemberIds: string[],
+): Promise<number> => {
+  const rows = await listOf('/rest/calendarEventParticipants', calendarEventId);
+  let removed = 0;
+
+  for (const row of rows) {
+    const memberId = String(row.workspaceMemberId ?? '');
+
+    if (row.id && memberId && !keepMemberIds.includes(memberId)) {
+      await client.delete(`/rest/calendarEventParticipants/${row.id}`);
+      removed += 1;
+    }
+  }
+
+  return removed;
+};
+
 /** Есть ли уже цель с таким значением в нужном поле. */
 const hasTarget = (targets: Row[], field: string, value: string): boolean =>
   targets.some((row) => (row as Record<string, unknown>)[field] === value);
@@ -138,8 +166,8 @@ export const ensureCallLinks = async (params: {
   clientPhone?: string;
   title?: string;
   happensAt?: string;
-  /** Ставить ли нашего сотрудника участником (только по итоговому хуку). */
-  allowEmployee?: boolean;
+  /** Итоговый хук: оставить одного ответившего, лишних участников убрать. */
+  finalizeEmployees?: boolean;
 }): Promise<LinkResult> => {
   const {
     calendarEventId,
@@ -150,7 +178,7 @@ export const ensureCallLinks = async (params: {
     clientPhone = '',
     happensAt = '',
     title = '',
-    allowEmployee = false,
+    finalizeEmployees = false,
   } = params;
 
   const result: LinkResult = {
@@ -159,6 +187,7 @@ export const ensureCallLinks = async (params: {
     companyParticipant: false,
     employeeParticipant: false,
     internalEmployeeParticipant: false,
+    removedEmployees: 0,
     companyTimeline: false,
   };
 
@@ -209,9 +238,10 @@ export const ensureCallLinks = async (params: {
     result.companyParticipant = true;
   }
 
-  // наш сотрудник — ровно один, тот, кто ответил (по итоговому хуку history).
+  // наш сотрудник: на промежуточных хуках — тот, кому звонило (на групповом
+  // номере так собираются все, кому звонило); на итоговом — остаётся один
+  // ответивший, лишних убираем ниже.
   if (
-    allowEmployee &&
     employee.employeeId &&
     !participants.some((row) => row.workspaceMemberId === employee.employeeId)
   ) {
@@ -236,6 +266,16 @@ export const ensureCallLinks = async (params: {
       responseStatus: 'ACCEPTED',
     });
     result.internalEmployeeParticipant = true;
+  }
+
+  // итоговый хук и ответивший определился: оставляем только его
+  // (внутреннего собеседника не трогаем). Если никто не ответил — оставляем
+  // всех, кому звонило.
+  if (finalizeEmployees && employee.employeeId) {
+    result.removedEmployees = await removeOtherEmployees(
+      calendarEventId,
+      [employee.employeeId, lookup.internalEmployeeId].filter(Boolean),
+    );
   }
 
   return result;

@@ -55,9 +55,10 @@ export const registerCall = async (
   const title = titleFor(parsed, lookup);
   const existing = await findCallByCallId(parsed.callid);
 
-  // Наш сотрудник становится участником только по итоговому хуку `history`:
-  // так на групповом звонке в участниках остаётся один — тот, кто ответил.
-  const allowEmployee = parsed.stage === 'FINISHED';
+  // На итоговом хуке `history` приводим участников-сотрудников в порядок:
+  // если кто-то ответил — остаётся только он, если нет — остаются все,
+  // кому звонило (пропущенный групповой звонок виден в журнале каждого).
+  const finalizeEmployees = parsed.stage === 'FINISHED';
 
   if (existing) {
     await updateCallRecording(existing.id, parsed);
@@ -71,7 +72,7 @@ export const registerCall = async (
       clientPhone: parsed.clientPhone,
       happensAt: parsed.startedAtIso || new Date().toISOString(),
       title: existing.title || title,
-      allowEmployee,
+      finalizeEmployees,
     });
 
     return {
@@ -96,7 +97,7 @@ export const registerCall = async (
     clientPhone: parsed.clientPhone,
     happensAt: startsAt,
     title,
-    allowEmployee,
+    finalizeEmployees,
   });
 
   return { action: 'created', callId: call.id, calendarEventId, title, links };
