@@ -7,23 +7,37 @@ import {
   TIMELINE_ACTIVITY_TYPE_UNIVERSAL_IDENTIFIER,
 } from 'src/constants/universal-identifiers';
 import type { ClientLookup } from 'src/shared/megafon/crm-lookup';
+import type { DealRef } from 'src/shared/megafon/deal-lookup';
 import type { EmployeeLookup } from 'src/shared/megafon/employee-lookup';
 
 /**
- * Связи звонка: клиент и компания становятся «целями» события календаря
- * (`calendarEventTarget`), клиент и сотрудник — «участниками»
- * (`calendarEventParticipant`). Так же делал прежний воркфлоу, и именно по этим
- * связям звонок виден в карточке клиента, компании и сотрудника.
+ * Связи звонка (решение 22.09.2026):
+ *
+ * - **цели события** (`calendarEventTarget`) — только **сделки** «в работе»
+ *   (заказ / ремонт / заправка / тендер). Контакт и компания целями больше
+ *   не ставятся;
+ * - **участники** (`calendarEventParticipant`) — клиент-контакт, компания-клиент
+ *   (поле «Компания», создано 21.09) и наш сотрудник. Сотрудник ставится
+ *   **один** и только по итоговому хуку (`history`) — тот, кто ответил;
+ * - лента компании — своим типом активности приложения.
  *
  * Всё идемпотентно: сначала читаем, что уже есть, и создаём только недостающее.
  */
 
 const client = new RestApiClient();
 
+/** Поле цели события для каждого вида сделки. */
+const DEAL_TARGET_FIELD: Record<DealRef['kind'], string> = {
+  opportunity: 'targetOpportunityId',
+  remontOborudovaniya: 'nashaSdelkaRemontOborudovaniyaId',
+  zapravkaKartridzhey: 'nashaSdelkaZapravkaKartridzheyId',
+  tender: 'nashaSdelkaTenderId',
+};
+
 export type LinkResult = {
-  personTarget: boolean;
-  companyTarget: boolean;
+  dealTargets: number;
   personParticipant: boolean;
+  companyParticipant: boolean;
   employeeParticipant: boolean;
   internalEmployeeParticipant: boolean;
   companyTimeline: boolean;
@@ -32,7 +46,12 @@ export type LinkResult = {
 type Row = {
   targetPersonId?: string | null;
   targetCompanyId?: string | null;
+  targetOpportunityId?: string | null;
+  nashaSdelkaRemontOborudovaniyaId?: string | null;
+  nashaSdelkaZapravkaKartridzheyId?: string | null;
+  nashaSdelkaTenderId?: string | null;
   personId?: string | null;
+  companyId?: string | null;
   workspaceMemberId?: string | null;
 };
 
@@ -91,7 +110,7 @@ const rowsOf = (response: unknown, key: string): Row[] => {
 
 const listOf = async (path: string, calendarEventId: string): Promise<Row[]> => {
   const response = await client.get<unknown>(path, {
-    query: { filter: `calendarEventId[eq]:"${calendarEventId}"`, limit: 30 },
+    query: { filter: `calendarEventId[eq]:"${calendarEventId}"`, limit: 50 },
   });
 
   const key = Object.keys((response as { data?: Record<string, unknown> })?.data ?? {})[0] ?? '';
@@ -105,29 +124,39 @@ const addTarget = async (calendarEventId: string, body: Record<string, unknown>)
 const addParticipant = async (calendarEventId: string, body: Record<string, unknown>) =>
   client.post('/rest/calendarEventParticipants', { calendarEventId, ...body });
 
+/** Есть ли уже цель с таким значением в нужном поле. */
+const hasTarget = (targets: Row[], field: string, value: string): boolean =>
+  targets.some((row) => (row as Record<string, unknown>)[field] === value);
+
 export const ensureCallLinks = async (params: {
   calendarEventId: string;
   callRecordingId: string;
   lookup: ClientLookup;
   employee: EmployeeLookup;
+  /** Сделки-цели, найденные по клиенту (пусто — цели не будет). */
+  deals?: DealRef[];
   clientPhone?: string;
   title?: string;
   happensAt?: string;
+  /** Ставить ли нашего сотрудника участником (только по итоговому хуку). */
+  allowEmployee?: boolean;
 }): Promise<LinkResult> => {
   const {
     calendarEventId,
     callRecordingId,
     lookup,
     employee,
+    deals = [],
     clientPhone = '',
     happensAt = '',
     title = '',
+    allowEmployee = false,
   } = params;
 
   const result: LinkResult = {
-    personTarget: false,
-    companyTarget: false,
+    dealTargets: 0,
     personParticipant: false,
+    companyParticipant: false,
     employeeParticipant: false,
     internalEmployeeParticipant: false,
     companyTimeline: false,
@@ -138,14 +167,14 @@ export const ensureCallLinks = async (params: {
   const targets = await listOf('/rest/calendarEventTargets', calendarEventId);
   const participants = await listOf('/rest/calendarEventParticipants', calendarEventId);
 
-  if (lookup.personId && !targets.some((row) => row.targetPersonId === lookup.personId)) {
-    await addTarget(calendarEventId, { targetPersonId: lookup.personId });
-    result.personTarget = true;
-  }
+  // Цели — только сделки «в работе» (контакт и компания целями не ставятся).
+  for (const deal of deals) {
+    const field = DEAL_TARGET_FIELD[deal.kind];
 
-  if (lookup.companyId && !targets.some((row) => row.targetCompanyId === lookup.companyId)) {
-    await addTarget(calendarEventId, { targetCompanyId: lookup.companyId });
-    result.companyTarget = true;
+    if (field && !hasTarget(targets, field, deal.id)) {
+      await addTarget(calendarEventId, { [field]: deal.id });
+      result.dealTargets += 1;
+    }
   }
 
   // лента компании: системный тип активности приложению недоступен, пишем своим
@@ -169,7 +198,23 @@ export const ensureCallLinks = async (params: {
     result.personParticipant = true;
   }
 
-  if (employee.employeeId && !participants.some((row) => row.workspaceMemberId === employee.employeeId)) {
+  // компания-клиент — участником события: тогда она видна в журнале в колонке
+  // «Клиент» и попадает в ленту. displayName — название компании.
+  if (lookup.companyId && !participants.some((row) => row.companyId === lookup.companyId)) {
+    await addParticipant(calendarEventId, {
+      companyId: lookup.companyId,
+      displayName: lookup.companyName || '',
+      responseStatus: 'ACCEPTED',
+    });
+    result.companyParticipant = true;
+  }
+
+  // наш сотрудник — ровно один, тот, кто ответил (по итоговому хуку history).
+  if (
+    allowEmployee &&
+    employee.employeeId &&
+    !participants.some((row) => row.workspaceMemberId === employee.employeeId)
+  ) {
     await addParticipant(calendarEventId, {
       workspaceMemberId: employee.employeeId,
       displayName: employee.employeeName || '',

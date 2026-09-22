@@ -36,10 +36,18 @@ export type ParsedCall = {
   clientPhoneRaw: string;
   /** Наш номер (ВАТС), 10 цифр — по нему ищем сотрудника. */
   ourNumber: string;
+  /** Номер, на который звонок пришёл (`diversion`), 10 цифр — общий номер группы. */
+  diversion: string;
+  /** Номер `diversion` как пришёл от ВАТС. */
+  diversionRaw: string;
   /** Внутренний номер сотрудника (ext). */
   extension: string;
   /** Логин оператора в ВАТС (user). */
   user: string;
+  /** Группа ВАТС, на которую пришёл звонок (`group`, например `sales`). */
+  group: string;
+  /** Человеческое название группы (`groupRealName`, например «Отдел продаж»). */
+  groupRealName: string;
   startedAtIso: string;
   endedAtIso: string;
   durationSeconds: number;

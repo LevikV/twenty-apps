@@ -3,8 +3,10 @@ import { Response, kv, type RoutePayload } from 'twenty-sdk/logic-function';
 
 import { MEGAFON_WEBHOOK_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 import { lookupClientByPhone, emptyLookup, type ClientLookup } from 'src/shared/megafon/crm-lookup';
+import { findCallDeals, type DealRef } from 'src/shared/megafon/deal-lookup';
 import { lookupEmployeeByOurNumber, emptyEmployee, type EmployeeLookup } from 'src/shared/megafon/employee-lookup';
 import { parseMegafonPayload } from 'src/shared/megafon/parse';
+import { isSharedNumber } from 'src/shared/megafon/shared-numbers';
 import { registerCall, type RegisterResult } from 'src/shared/megafon/register-call';
 import { ensureQueueTask, type QueueSeedResult } from 'src/shared/megafon/queue';
 import { writeWebhookLog } from 'src/shared/megafon/webhook-log';
@@ -31,6 +33,14 @@ const handler = async (event: RoutePayload) => {
 
   let lookup: ClientLookup = emptyLookup();
   let employee: EmployeeLookup = emptyEmployee();
+  let deals: DealRef[] = [];
+
+  // Звонок на общий (групповой) номер компании — например отдел продаж.
+  // Признаки: номер `diversion` (на который пришёл звонок) или номер ответившего
+  // есть в настройке `SHARED_PHONE_NUMBERS`, либо ВАТС прислала группу (`group`).
+  // На таком звонке ВАТС шлёт событие каждому, кому звонило.
+  const sharedNumber =
+    isSharedNumber(parsed.diversion) || isSharedNumber(parsed.ourNumber) || Boolean(parsed.group);
 
   try {
     lookup = await lookupClientByPhone(parsed.clientPhone);
@@ -44,9 +54,17 @@ const handler = async (event: RoutePayload) => {
     errors.push(`сотрудник: ${describeError(error)}`);
   }
 
+  // Цели события — только сделки клиента «в работе»: сначала у контакта,
+  // иначе у его компании (если компания не определилась — цели не будет).
+  try {
+    deals = await findCallDeals({ personId: lookup.personId, companyId: lookup.companyId });
+  } catch (error) {
+    errors.push(`сделки: ${describeError(error)}`);
+  }
+
   // Сухой прогон: показываем разбор и результаты поиска, в CRM ничего не пишем.
   if (emptyString(body.dry_run) === '1') {
-    await kv.set('webhook:dry-run', { receivedAt, parsed, lookup, employee, errors });
+    await kv.set('webhook:dry-run', { receivedAt, parsed, lookup, employee, deals, sharedNumber, errors });
 
     return new Response(
       JSON.stringify({
@@ -55,6 +73,8 @@ const handler = async (event: RoutePayload) => {
         parsed,
         lookup,
         employee,
+        deals,
+        sharedNumber,
         lookupError: errors.join(' | '),
       }),
       { status: 200, headers: { 'content-type': 'application/json' } },
@@ -66,7 +86,7 @@ const handler = async (event: RoutePayload) => {
   let queued: QueueSeedResult | '' = '';
 
   try {
-    result = await registerCall(parsed, lookup, employee);
+    result = await registerCall(parsed, lookup, employee, deals);
   } catch (error) {
     errors.push(`звонок: ${describeError(error)}`);
   }
@@ -107,12 +127,15 @@ const handler = async (event: RoutePayload) => {
     action: result?.action ?? 'none',
     callId: result?.callId ?? '',
     title: result?.title ?? '',
+    deals: deals.map((deal) => `${deal.kind}:${deal.name}`),
+    sharedNumber,
     queued,
     logId,
+    links: result?.links,
     errors,
   };
 
-  await kv.set('webhook:last', { receivedAt, parsed, lookup, employee, answer, body });
+  await kv.set('webhook:last', { receivedAt, parsed, lookup, employee, deals, sharedNumber, answer, body });
 
   return new Response(JSON.stringify(answer), {
     status: 200,

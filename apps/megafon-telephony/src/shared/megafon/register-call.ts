@@ -5,6 +5,7 @@ import {
   findCallByCallId,
   updateCallRecording,
 } from 'src/shared/megafon/call-record';
+import type { DealRef } from 'src/shared/megafon/deal-lookup';
 import type { EmployeeLookup } from 'src/shared/megafon/employee-lookup';
 import { ensureCallLinks, type LinkResult } from 'src/shared/megafon/link-call';
 import { buildCallTitle } from 'src/shared/megafon/parse';
@@ -39,6 +40,7 @@ export const registerCall = async (
   parsed: ParsedCall,
   lookup: ClientLookup,
   employee: EmployeeLookup,
+  deals: DealRef[] = [],
 ): Promise<RegisterResult> => {
   if (!parsed.callid) {
     return {
@@ -53,6 +55,10 @@ export const registerCall = async (
   const title = titleFor(parsed, lookup);
   const existing = await findCallByCallId(parsed.callid);
 
+  // Наш сотрудник становится участником только по итоговому хуку `history`:
+  // так на групповом звонке в участниках остаётся один — тот, кто ответил.
+  const allowEmployee = parsed.stage === 'FINISHED';
+
   if (existing) {
     await updateCallRecording(existing.id, parsed);
 
@@ -61,9 +67,11 @@ export const registerCall = async (
       callRecordingId: existing.id,
       lookup,
       employee,
+      deals,
       clientPhone: parsed.clientPhone,
       happensAt: parsed.startedAtIso || new Date().toISOString(),
       title: existing.title || title,
+      allowEmployee,
     });
 
     return {
@@ -84,9 +92,11 @@ export const registerCall = async (
     callRecordingId: call.id,
     lookup,
     employee,
+    deals,
     clientPhone: parsed.clientPhone,
     happensAt: startsAt,
     title,
+    allowEmployee,
   });
 
   return { action: 'created', callId: call.id, calendarEventId, title, links };

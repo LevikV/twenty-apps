@@ -140,8 +140,12 @@ export const parseMegafonPayload = (body: Record<string, unknown>): ParsedCall =
     // ВАТС: для звонка на общий номер `telnum` — номер ответившего сотрудника,
     // а `diversion` — общий номер компании. Поэтому приоритет у `telnum`.
     ourNumber: normalizePhone(body.telnum ?? body.diversion),
+    diversion: normalizePhone(body.diversion),
+    diversionRaw: String(body.diversion ?? '').trim(),
     extension: String(body.ext ?? '').trim(),
     user: String(body.user ?? '').trim(),
+    group: String(body.group ?? '').trim(),
+    groupRealName: String(body.groupRealName ?? '').trim(),
     startedAtIso,
     endedAtIso,
     durationSeconds,

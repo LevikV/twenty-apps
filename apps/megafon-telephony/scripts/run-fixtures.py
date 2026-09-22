@@ -89,6 +89,14 @@ def main() -> int:
             f"[{employee.get('source') or '—'}]"
         )
 
+        # Групповой номер и сделки-цели (решение 22.09.2026)
+        deals = answer.get("deals") or []
+        deal_names = ", ".join(f"{d.get('kind')}: {d.get('name')}" for d in deals) or "—"
+        print(
+            f"    групповой номер: {'ДА' if answer.get('sharedNumber') else 'нет'}; "
+            f"цели-сделки: {deal_names}"
+        )
+
         expected = case.get("expectedOldWorkflow") or {}
 
         # сверка «кого нашли» со старым воркфлоу (сотрудника ищем на подшаге 1.3).
