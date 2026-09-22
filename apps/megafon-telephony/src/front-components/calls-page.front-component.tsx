@@ -23,7 +23,9 @@ import {
 
 const ACCESS_PATH = '/call-journal-access';
 const PAGE_SIZE = 60;
-const MAX_MEMBER_PAGES = 8;
+const MAX_MEMBER_PAGES = 3;
+/** Сколько последних событий сотрудника просматриваем, чтобы набрать звонки. */
+const MAX_EVENT_SCAN = 120;
 /** Сколько страниц максимум догружаем для связей события (участники, цели, люди, компании). */
 const MAX_PAGES = 5;
 
@@ -187,9 +189,13 @@ const CallsPage = () => {
   const token = env.TWENTY_APP_ACCESS_TOKEN ?? '';
 
   const api = useCallback(
-    (path: string) =>
+    (path: string, init?: RequestInit) =>
       fetch(`${apiBase}${path}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        ...init,
+        headers: {
+          ...((init?.headers as Record<string, string>) ?? {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
       }),
     [apiBase, token],
   );
@@ -321,7 +327,31 @@ const CallsPage = () => {
           return collected;
         };
 
-        // 1. События сотрудника (страницами — у активных сотрудников больше 60).
+        // GraphQL-запрос: он умеет серверную сортировку и фильтр по связи одновременно.
+        const graphqlQuery = async <T,>(
+          query: string,
+          variables: Record<string, unknown>,
+        ): Promise<T> => {
+          const response = await api('/graphql', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ query, variables }),
+          });
+          const json = (await response.json()) as {
+            data?: T;
+            errors?: { message?: string }[];
+          };
+
+          if (json.errors?.length) {
+            throw new Error(json.errors.map((item) => item.message ?? '').join('; '));
+          }
+
+          return (json.data ?? {}) as T;
+        };
+
+        // 1. Свежие события сотрудника. GraphQL сортирует на сервере (REST при фильтре
+        // по связи порядок игнорирует), поэтому берём только последние события —
+        // перебирать все страницы не нужно, даже когда звонков тысячи.
         const collectedEventIds: string[] = [];
         const activeEventIds = cursor === null ? [] : eventIdsRef.current;
 
@@ -329,32 +359,43 @@ const CallsPage = () => {
           let after: string | null = null;
 
           for (let page = 0; page < MAX_MEMBER_PAGES; page += 1) {
-            const params = new URLSearchParams({
-              filter: `workspaceMemberId[eq]:${workspaceMemberId}`,
-              limit: String(PAGE_SIZE),
-              select: 'id,calendarEventId',
-            });
+            const data = await graphqlQuery<{
+              calendarEventParticipants?: {
+                edges: { node: { calendarEventId?: string | null } }[];
+                pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+              };
+            }>(
+              `query JournalEvents($member: UUID!, $after: String) {
+                 calendarEventParticipants(
+                   filter: { workspaceMemberId: { eq: $member } }
+                   orderBy: [{ createdAt: DescNullsLast }]
+                   first: 60
+                   after: $after
+                 ) {
+                   edges { node { calendarEventId } }
+                   pageInfo { hasNextPage endCursor }
+                 }
+               }`,
+              { member: workspaceMemberId, after },
+            );
 
-            if (after) {
-              params.set('starting_after', after);
-            }
+            const connection = data.calendarEventParticipants;
 
-            const response = await api(`/rest/calendarEventParticipants?${params.toString()}`);
-            const json = (await response.json()) as ApiList<{
-              calendarEventId?: string | null;
-            }>;
-
-            (json.data?.calendarEventParticipants ?? []).forEach((participant) => {
-              if (participant.calendarEventId) {
-                collectedEventIds.push(participant.calendarEventId);
+            (connection?.edges ?? []).forEach((edge) => {
+              if (edge.node.calendarEventId) {
+                collectedEventIds.push(edge.node.calendarEventId);
               }
             });
 
-            if (!json.pageInfo?.hasNextPage || !json.pageInfo.endCursor) {
+            if (collectedEventIds.length >= MAX_EVENT_SCAN) {
               break;
             }
 
-            after = json.pageInfo.endCursor;
+            if (!connection?.pageInfo?.hasNextPage || !connection.pageInfo.endCursor) {
+              break;
+            }
+
+            after = connection.pageInfo.endCursor;
           }
 
           const unique = [...new Set(collectedEventIds)];
@@ -371,26 +412,39 @@ const CallsPage = () => {
           return;
         }
 
-        // 2. Звонки по событиям сотрудника. REST не сортирует выборку, когда фильтр идёт по связи,
-        // и свежий звонок запросто остаётся за первой страницей — поэтому забираем все страницы,
-        // а порядок задаём сами (см. сортировку ниже).
-        const records = await fetchAll<{
-          id: string;
-          title?: string | null;
-          startedAt?: string | null;
-          endedAt?: string | null;
-          napravlenie?: string | null;
-          itog?: string | null;
-          audio?: Array<{ fileId?: string; url?: string }> | null;
-          calendarEventId?: string | null;
+        // 2. Последние звонки по этим событиям — снова сортировка на сервере:
+        // берём только свежие, а не «первые попавшиеся 60».
+        const callData = await graphqlQuery<{
+          callRecordings?: {
+            edges: {
+              node: {
+                id: string;
+                title?: string | null;
+                startedAt?: string | null;
+                endedAt?: string | null;
+                napravlenie?: string | null;
+                itog?: string | null;
+                audio?: Array<{ fileId?: string; url?: string }> | null;
+                calendarEventId?: string | null;
+              };
+            }[];
+          };
         }>(
-          '/rest/callRecordings',
-          {
-            select: 'id,title,startedAt,endedAt,napravlenie,itog,audio,calendarEventId',
-            filter: `calendarEventId[in]:[${activeEventIds.join(',')}]`,
-          },
-          'callRecordings',
+          `query JournalCalls($ids: [UUID!]) {
+             callRecordings(
+               filter: { calendarEventId: { in: $ids } }
+               orderBy: [{ startedAt: DescNullsLast }]
+               first: 60
+             ) {
+               edges {
+                 node { id title startedAt endedAt napravlenie itog calendarEventId audio { url } }
+               }
+             }
+           }`,
+          { ids: activeEventIds },
         );
+
+        const records = (callData.callRecordings?.edges ?? []).map((edge) => edge.node);
 
         if (records.length === 0) {
           setCalls((current) => (cursor === null ? [] : current));
@@ -415,6 +469,7 @@ const CallsPage = () => {
         const personIdsByEvent: Record<string, string[]> = {};
         const memberNamesByEvent: Record<string, string[]> = {};
         const phoneByEvent: Record<string, string> = {};
+        const participantCompanyIdsByEvent: Record<string, string[]> = {};
         const targetPersonIdsByEvent: Record<string, string[]> = {};
         const targetCompanyIdsByEvent: Record<string, string[]> = {};
         const dealTargetsByEvent: Record<string, { label: string; id: string }[]> = {};
@@ -442,13 +497,14 @@ const CallsPage = () => {
             calendarEventId?: string | null;
             personId?: string | null;
             workspaceMemberId?: string | null;
+            companyId?: string | null;
             displayName?: string | null;
             handle?: string | null;
           }>(
             '/rest/calendarEventParticipants',
             {
               filter: `calendarEventId[in]:[${callEventIds.join(',')}]`,
-              select: 'id,calendarEventId,personId,workspaceMemberId,displayName,handle',
+              select: 'id,calendarEventId,personId,workspaceMemberId,companyId,displayName,handle',
             },
             'calendarEventParticipants',
           );
@@ -462,6 +518,11 @@ const CallsPage = () => {
 
             if (participant.handle) {
               phoneByEvent[eventId] = normalizePhone(participant.handle);
+            }
+
+            if (participant.companyId) {
+              // звонок с номера компании: компания — вторая сторона разговора
+              pushUnique(participantCompanyIdsByEvent, eventId, participant.companyId);
             }
 
             if (participant.personId) {
@@ -569,7 +630,7 @@ const CallsPage = () => {
 
         const companyIds = [
           ...new Set([
-            ...Object.values(companyByPerson),
+            ...Object.values(participantCompanyIdsByEvent).flat(),
             ...Object.values(targetCompanyIdsByEvent).flat(),
           ]),
         ];
@@ -639,11 +700,15 @@ const CallsPage = () => {
           const targetCompanyIds = eventId ? targetCompanyIdsByEvent[eventId] ?? [] : [];
           const dealTargets = eventId ? dealTargetsByEvent[eventId] ?? [] : [];
 
+          const participantCompanyIds = eventId
+            ? participantCompanyIdsByEvent[eventId] ?? []
+            : [];
+
           // Колонка «Клиент» — только участники события, кроме нашего сотрудника, чью запись
-          // смотрим: контакт, его компания и (внутренний звонок) коллега. Цели сюда не попадают.
+          // смотрим: контакт, компания (номер компании) или коллега. Цели сюда не попадают.
           const clientParts = [
             ...personIds.map((id) => personNames[id] ?? '').filter(Boolean),
-            ...personIds.map((id) => companyNames[companyByPerson[id] ?? ''] ?? '').filter(Boolean),
+            ...participantCompanyIds.map((id) => companyNames[id] ?? '').filter(Boolean),
             ...memberNames.map((name) => `Коллега: ${name}`),
           ];
 
@@ -672,7 +737,7 @@ const CallsPage = () => {
               (eventId ? phoneByEvent[eventId] : '') ||
               phoneFromTitle(record.title ?? null),
             audioUrl: record.audio?.[0]?.url ?? null,
-            hasClient: personIds.length > 0,
+            hasClient: personIds.length > 0 || participantCompanyIds.length > 0,
             hasTarget: targetParts.length > 0,
             isInternal: personIds.length === 0 && memberNames.length > 0,
           };
