@@ -24,15 +24,19 @@ import { ensureCallLinks } from 'src/shared/megafon/link-call';
  * компания и запись в ленте компании у исторических звонков отсутствуют. Здесь
  * досоздаём их по тем же правилам, что и приём вебхуков (см. `crm-lookup.ts`).
  *
- * Работает по расписанию, порциями, идемпотентно: курсор хранится в kv-хранилище
- * приложения, каждый звонок обрабатывается один раз. Режим переключается
- * константой `MODE`: `dry` — только считаем, `live` — досоздаём связи.
+ * Работает порциями, идемпотентно: курсор хранится в kv-хранилище приложения,
+ * каждый звонок обрабатывается один раз. Режим запуска передаётся параметром:
+ * `{"mode":"dry"}` — только считаем, `{"mode":"live"}` — пишем в CRM,
+ * `{"reset":true}` — начать проход заново.
+ *
+ * Миграция 22.09.2026: наряду со связями убирает старые цели-контакт и
+ * цели-компанию (цель события теперь — только сделка).
  */
 
-const CONFIG: { mode: 'dry' | 'live' } = { mode: 'live' };
+/** Режим задаётся при запуске: `{"mode":"dry"}` — только посчитать, `{"mode":"live"}` — писать. */
+type RunOptions = { mode?: string; reset?: boolean };
 
 /** Размер порции: в сухом режиме только чтение, в боевом — с записью в CRM. */
-const PORTION = CONFIG.mode === 'live' ? 8 : 20;
 const PAUSE_MS = 400;
 const STATE_KEY = 'history:state';
 
@@ -47,6 +51,7 @@ type CallRow = {
 };
 
 type LogRow = {
+  cmd?: string | null;
   klient?: string | null;
   nashNomer?: string | null;
   dannye?: unknown;
@@ -84,11 +89,11 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * `id` фильтром `id > курсор` — так ни одна запись не теряется, а размер порции
  * совпадает с размером ответа.
  */
-const readCalls = async (cursor: string): Promise<CallRow[]> => {
+const readCalls = async (cursor: string, portion: number): Promise<CallRow[]> => {
   const response = await client.get<unknown>('/rest/callRecordings', {
     query: {
       filter: cursor ? `id[gt]:"${cursor}"` : undefined,
-      limit: PORTION,
+      limit: portion,
     },
   });
 
@@ -112,9 +117,24 @@ const readLogPhones = async (
   let phone = '';
   let ourNumber = '';
 
-  for (const log of logs) {
-    ourNumber = ourNumber || digits10(log.nashNomer);
+  // Наш номер берём из итогового хука `history` (в нём — тот, кто ответил),
+  // затем из `event`. Служебный `contact` несёт общий номер компании — по нему
+  // сотрудник не определяется, поэтому его для этого не используем.
+  const ourNumberFrom = (cmd: string): string => {
+    for (const log of logs) {
+      if (String(log.cmd ?? '') !== cmd) continue;
 
+      const value = digits10(log.nashNomer);
+
+      if (value) return value;
+    }
+
+    return '';
+  };
+
+  ourNumber = ourNumberFrom('history') || ourNumberFrom('event');
+
+  for (const log of logs) {
     if (phone) continue;
 
     phone = digits10(log.klient);
@@ -134,14 +154,19 @@ const readLogPhones = async (
   return { phone, ourNumber };
 };
 
-const handler = async () => {
+const handler = async (event?: RunOptions & { body?: RunOptions }) => {
+  // функция запускается либо напрямую (payload), либо по служебному HTTP-маршруту
+  const options: RunOptions = (event?.body ?? event ?? {}) as RunOptions;
+  const mode: 'dry' | 'live' = options.mode === 'dry' ? 'dry' : 'live';
+  const portion = 40;
+
   const state = (await kv.get(STATE_KEY)) as State | null;
 
   const current: State = {
-    mode: CONFIG.mode,
-    cursor: state?.cursor ?? '',
-    processed: state?.processed ?? 0,
-    stats: state?.stats ?? {},
+    mode,
+    cursor: options.reset ? '' : state?.cursor ?? '',
+    processed: options.reset ? 0 : state?.processed ?? 0,
+    stats: options.reset ? {} : state?.stats ?? {},
     errors: state?.errors ?? [],
     updatedAt: new Date().toISOString(),
   };
@@ -153,7 +178,7 @@ const handler = async () => {
   let calls: CallRow[] = [];
 
   try {
-    calls = await readCalls(current.cursor);
+    calls = await readCalls(current.cursor, portion);
   } catch (error) {
     current.errors = [`чтение звонков: ${describeError(error)}`, ...current.errors].slice(0, 5);
     current.updatedAt = new Date().toISOString();
@@ -192,7 +217,7 @@ const handler = async () => {
       if (employee.employeeId) count('сотрудник найден');
       if (deals.length > 0) count('сделки найдены');
 
-      if (CONFIG.mode === 'live' && call.calendarEventId) {
+      if (mode === 'live' && call.calendarEventId) {
         const links = await ensureCallLinks({
           calendarEventId: call.calendarEventId,
           callRecordingId: call.id,
@@ -204,9 +229,12 @@ const handler = async () => {
           title: String(call.title ?? ''),
           // история — итоговый срез: приводим участников к правилу
           finalizeEmployees: true,
+          // миграция: старые цели-контакт и цели-компания больше не нужны
+          cleanupOldTargets: true,
         });
 
         if (links.dealTargets > 0) count('добавлены цели-сделки');
+        if (links.removedTargets > 0) count('убраны старые цели (контакт/компания)');
         if (links.personParticipant) count('добавлен контакт');
         if (links.companyParticipant) count('добавлена компания');
         if (links.companyTimeline) count('добавлена лента');
@@ -214,8 +242,8 @@ const handler = async () => {
         if (links.removedEmployees > 0) count('убрано лишних сотрудников');
       }
 
-      if (CONFIG.mode === 'dry' && lookup.companyId) count('лента (будет добавлена)');
-      if (CONFIG.mode === 'dry' && (lookup.personId || lookup.companyId || deals.length > 0)) {
+      if (mode === 'dry' && lookup.companyId) count('лента (будет добавлена)');
+      if (mode === 'dry' && (lookup.personId || lookup.companyId || deals.length > 0)) {
         count('связи (будут добавлены)');
       }
     } catch (error) {
@@ -236,9 +264,14 @@ const handler = async () => {
 export default defineLogicFunction({
   universalIdentifier: HISTORY_BACKFILL_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER,
   name: 'megafon-history-backfill',
-  description: 'Приведение истории звонков: связи и лента компаний (порциями по расписанию)',
+  description: 'Приведение истории звонков: связи, цели и лента (порциями; запуск по маршруту)',
   timeoutSeconds: 120,
   handler,
-  // Расписание выключено: функция — инструмент для разового прогона по истории.
-  // Включается на время (расписание + сброс курсора в kv) и снова снимается.
+  // Служебный маршрут: функция запускается вручную порциями (миграция истории).
+  // Требует авторизации; при штатной работе расписание не используется.
+  httpRouteTriggerSettings: {
+    path: '/migrate-links',
+    httpMethod: 'POST',
+    isAuthRequired: true,
+  },
 });

@@ -42,6 +42,8 @@ export type LinkResult = {
   internalEmployeeParticipant: boolean;
   /** Сколько «лишних» участников-сотрудников убрали на итоговом хуке. */
   removedEmployees: number;
+  /** Сколько старых целей-контакта/компании убрали (миграция). */
+  removedTargets: number;
   companyTimeline: boolean;
 };
 
@@ -156,6 +158,24 @@ const removeOtherEmployees = async (
 const hasTarget = (targets: Row[], field: string, value: string): boolean =>
   targets.some((row) => (row as Record<string, unknown>)[field] === value);
 
+/**
+ * Убрать старые цели-контакт и цели-компанию (штатная морф-группа «Клиент»).
+ * Нужно разовой миграцией: цель теперь — только сделка, а контакт и компания
+ * живут участниками события. Сделки и их цели не трогаем.
+ */
+const removeClientTargets = async (targets: Row[]): Promise<number> => {
+  let removed = 0;
+
+  for (const row of targets) {
+    if (row.id && (row.targetPersonId || row.targetCompanyId)) {
+      await client.delete(`/rest/calendarEventTargets/${row.id}`);
+      removed += 1;
+    }
+  }
+
+  return removed;
+};
+
 export const ensureCallLinks = async (params: {
   calendarEventId: string;
   callRecordingId: string;
@@ -168,6 +188,8 @@ export const ensureCallLinks = async (params: {
   happensAt?: string;
   /** Итоговый хук: оставить одного ответившего, лишних участников убрать. */
   finalizeEmployees?: boolean;
+  /** Разовая миграция: убрать старые цели-контакт и цели-компанию. */
+  cleanupOldTargets?: boolean;
 }): Promise<LinkResult> => {
   const {
     calendarEventId,
@@ -179,6 +201,7 @@ export const ensureCallLinks = async (params: {
     happensAt = '',
     title = '',
     finalizeEmployees = false,
+    cleanupOldTargets = false,
   } = params;
 
   const result: LinkResult = {
@@ -188,6 +211,7 @@ export const ensureCallLinks = async (params: {
     employeeParticipant: false,
     internalEmployeeParticipant: false,
     removedEmployees: 0,
+    removedTargets: 0,
     companyTimeline: false,
   };
 
@@ -204,6 +228,11 @@ export const ensureCallLinks = async (params: {
       await addTarget(calendarEventId, { [field]: deal.id });
       result.dealTargets += 1;
     }
+  }
+
+  // миграция: старые цели-контакт и цели-компания больше не нужны
+  if (cleanupOldTargets) {
+    result.removedTargets = await removeClientTargets(targets);
   }
 
   // лента компании: системный тип активности приложению недоступен, пишем своим
