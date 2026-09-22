@@ -25,6 +25,8 @@ export type VatsHistoryCall = {
   client?: string;
   user?: string;
   diversion?: string;
+  group?: string;
+  groupRealName?: string;
   start?: string;
   wait?: string | number;
   duration?: string | number;
@@ -88,8 +90,12 @@ export const toParsedCall = (call: VatsHistoryCall): ParsedCall => {
     clientPhone: normalizePhone(call.client),
     clientPhoneRaw: String(call.client ?? ''),
     ourNumber: normalizePhone(call.diversion),
+    diversion: normalizePhone(call.diversion),
+    diversionRaw: String(call.diversion ?? ''),
     extension: String(call.user ?? ''),
     user: String(call.user ?? ''),
+    group: String(call.group ?? ''),
+    groupRealName: String(call.groupRealName ?? ''),
     startedAtIso,
     endedAtIso: startedAtIso
       ? new Date(Date.parse(startedAtIso) + durationSeconds * 1000).toISOString()

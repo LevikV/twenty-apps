@@ -14,6 +14,7 @@ import {
   lookupEmployeeByOurNumber,
   type EmployeeLookup,
 } from 'src/shared/megafon/employee-lookup';
+import { findCallDeals } from 'src/shared/megafon/deal-lookup';
 import { ensureCallLinks } from 'src/shared/megafon/link-call';
 
 /**
@@ -181,11 +182,15 @@ const handler = async () => {
       lookup = await lookupClientByPhone(phone);
       employee = await lookupEmployeeByOurNumber(ourNumber);
 
+      // Цели — только сделки «в работе» (контакт → компания), как в вебхуке
+      const deals = await findCallDeals({ personId: lookup.personId, companyId: lookup.companyId });
+
       if (lookup.personId) count('контакт найден');
       if (lookup.companyId) count('компания найдена');
       if (lookup.ambiguous) count('неоднозначно');
       if (!lookup.personId && !lookup.companyId && !lookup.ambiguous) count('не найдено');
       if (employee.employeeId) count('сотрудник найден');
+      if (deals.length > 0) count('сделки найдены');
 
       if (CONFIG.mode === 'live' && call.calendarEventId) {
         const links = await ensureCallLinks({
@@ -193,19 +198,26 @@ const handler = async () => {
           callRecordingId: call.id,
           lookup,
           employee,
+          deals,
           clientPhone: phone,
           happensAt: String(call.createdAt ?? ''),
           title: String(call.title ?? ''),
+          // история — итоговый срез: приводим участников к правилу
+          finalizeEmployees: true,
         });
 
-        if (links.personTarget) count('добавлен контакт');
-        if (links.companyTarget) count('добавлена компания');
+        if (links.dealTargets > 0) count('добавлены цели-сделки');
+        if (links.personParticipant) count('добавлен контакт');
+        if (links.companyParticipant) count('добавлена компания');
         if (links.companyTimeline) count('добавлена лента');
         if (links.employeeParticipant) count('добавлен сотрудник');
+        if (links.removedEmployees > 0) count('убрано лишних сотрудников');
       }
 
       if (CONFIG.mode === 'dry' && lookup.companyId) count('лента (будет добавлена)');
-      if (CONFIG.mode === 'dry' && (lookup.personId || lookup.companyId)) count('связи (будут добавлены)');
+      if (CONFIG.mode === 'dry' && (lookup.personId || lookup.companyId || deals.length > 0)) {
+        count('связи (будут добавлены)');
+      }
     } catch (error) {
       current.errors = [`${call.title ?? call.id}: ${describeError(error)}`, ...current.errors].slice(0, 5);
       count('ошибок');
