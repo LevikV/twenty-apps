@@ -77,6 +77,15 @@ const TARGET_KIND_LABELS: Record<LinkKind, string> = {
 
 type FilterKey = 'all' | 'contacts' | 'companies' | 'noClient' | 'noTarget' | 'internal';
 
+/** Быстрые кнопки периода над таблицей. */
+type PeriodPreset = 'today' | 'yesterday' | 'week';
+
+/** Период журнала: границы — календарные дни (`YYYY-MM-DD`) по нашему поясу, включительно. */
+type CallPeriod = {
+  from: string | null;
+  to: string | null;
+};
+
 type ApiList<T> = {
   data?: Record<string, T[] | undefined>;
   totalCount?: number;
@@ -135,6 +144,108 @@ const formatDuration = (startedAt: string | null, endedAt: string | null) => {
 
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 };
+
+/**
+ * Пояс, по которому считаем границы суток в журнале: Биробиджан, UTC+10.
+ * Решение Алексея 23.09.2026 — фиксированный пояс для всех, а не пояс браузера:
+ * у сотрудника с другим поясом в телефоне журнал должен показывать рабочие сутки.
+ */
+const LOCAL_UTC_OFFSET_MINUTES = 10 * 60;
+
+const pad2 = (value: number) => String(value).padStart(2, '0');
+
+/** Сдвиг момента в наш пояс: UTC-поля результата — местные дата и время. */
+const toLocalShifted = (date: Date) =>
+  new Date(date.getTime() + LOCAL_UTC_OFFSET_MINUTES * 60_000);
+
+/** Календарный день момента (`YYYY-MM-DD`) по нашему поясу. */
+const localDateKey = (date: Date) => {
+  const shifted = toLocalShifted(date);
+
+  return `${shifted.getUTCFullYear()}-${pad2(shifted.getUTCMonth() + 1)}-${pad2(shifted.getUTCDate())}`;
+};
+
+/** Соседний календарный день: `+1` — завтра, `-6` — шесть дней назад. */
+const shiftDateKey = (dateKey: string, days: number) => {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const shifted = new Date(Date.UTC(year, (month ?? 1) - 1, (day ?? 1) + days));
+
+  return `${shifted.getUTCFullYear()}-${pad2(shifted.getUTCMonth() + 1)}-${pad2(shifted.getUTCDate())}`;
+};
+
+/** Границы периода для пресета. «7 дней» — сегодня и шесть дней до него. */
+const periodForPreset = (preset: PeriodPreset, today = localDateKey(new Date())): CallPeriod => {
+  switch (preset) {
+    case 'yesterday': {
+      const day = shiftDateKey(today, -1);
+
+      return { from: day, to: day };
+    }
+    case 'week':
+      return { from: shiftDateKey(today, -6), to: today };
+    default:
+      return { from: today, to: today };
+  }
+};
+
+/** Попадание звонка в период: сравниваем календарные дни по нашему поясу, границы включительно. */
+const isCallInPeriod = (startedAt: string | null, period: CallPeriod) => {
+  // Период не задан — показываем весь журнал.
+  if (!period.from && !period.to) {
+    return true;
+  }
+
+  // Звонок без времени в периоде не показываем: отнести его к дню нельзя.
+  if (!startedAt) {
+    return false;
+  }
+
+  const date = new Date(startedAt);
+
+  if (Number.isNaN(date.getTime())) {
+    return false;
+  }
+
+  const key = localDateKey(date);
+
+  if (period.from && key < period.from) {
+    return false;
+  }
+
+  if (period.to && key > period.to) {
+    return false;
+  }
+
+  return true;
+};
+
+/** Подпись выбранного периода — для подсказки над таблицей. */
+const formatPeriodLabel = (period: CallPeriod) => {
+  if (!period.from && !period.to) {
+    return 'весь журнал';
+  }
+
+  const toRussian = (dateKey: string) => {
+    const [year, month, day] = dateKey.split('-');
+
+    return `${day}.${month}.${year}`;
+  };
+
+  if (period.from && period.to) {
+    return period.from === period.to
+      ? toRussian(period.from)
+      : `с ${toRussian(period.from)} по ${toRussian(period.to)}`;
+  }
+
+  return period.from ? `с ${toRussian(period.from)}` : `по ${toRussian(period.to ?? '')}`;
+};
+
+/** Кнопки периода над таблицей — в порядке показа. */
+const PERIOD_PRESETS: [PeriodPreset, string][] = [
+  ['today', 'Сегодня'],
+  ['yesterday', 'Вчера'],
+  ['week', '7 дней'],
+];
 
 const DIRECTION_LABELS: Record<string, string> = {
   INCOMING: 'входящий',
@@ -210,6 +321,10 @@ const CallsPage = () => {
   /** Чья панель открыта сейчас — строка подсвечивается (метка от панели звонка). */
   const [activeCallId, setActiveCallId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>('all');
+  // При открытии страницы период — «Сегодня» (решение Алексея 23.09.2026):
+  // весь журнал доступен кнопкой «Сбросить».
+  const [period, setPeriod] = useState<CallPeriod>(() => periodForPreset('today'));
+  const [periodPreset, setPeriodPreset] = useState<PeriodPreset | null>('today');
   const [error, setError] = useState<string>('');
 
   const env = useMemo(() => readEnv(), []);
@@ -1037,37 +1152,67 @@ const CallsPage = () => {
     })();
   };
 
-  // Фильтры контроля. Считаем по загруженным звонкам — список догружается кнопкой ниже.
-  // «Нет клиента» / «Нет цели» смотрим по своим колонкам: внутренние звонки сюда тоже попадают
-  // (разговор с коллегой тоже бывает про сделку — её и надо проставить целью).
+  // Период и фильтр контроля — две независимые оси: сначала оставляем звонки выбранного
+  // периода, затем к ним применяем фильтр контроля. Обратный период («с» позже «по»)
+  // не «молчит»: список пуст, а над таблицей покажем подсказку.
+  const isPeriodInverted = Boolean(period.from && period.to && period.from > period.to);
+
+  const periodCalls = useMemo(
+    () =>
+      isPeriodInverted ? [] : calls.filter((call) => isCallInPeriod(call.startedAt, period)),
+    [calls, period, isPeriodInverted],
+  );
+
+  // Фильтры контроля. Считаем по загруженным звонкам выбранного периода — список
+  // догружается кнопкой ниже. «Нет клиента» / «Нет цели» смотрим по своим колонкам:
+  // внутренние звонки сюда тоже попадают (разговор с коллегой тоже бывает про сделку —
+  // её и надо проставить целью).
   const filterCounts = useMemo(
     () => ({
-      all: calls.length,
-      contacts: calls.filter((call) => call.hasContactClient).length,
-      companies: calls.filter((call) => call.hasCompanyClient).length,
-      noClient: calls.filter((call) => !call.hasClient).length,
-      noTarget: calls.filter((call) => !call.hasTarget).length,
-      internal: calls.filter((call) => call.isInternal).length,
+      all: periodCalls.length,
+      contacts: periodCalls.filter((call) => call.hasContactClient).length,
+      companies: periodCalls.filter((call) => call.hasCompanyClient).length,
+      noClient: periodCalls.filter((call) => !call.hasClient).length,
+      noTarget: periodCalls.filter((call) => !call.hasTarget).length,
+      internal: periodCalls.filter((call) => call.isInternal).length,
     }),
-    [calls],
+    [periodCalls],
   );
 
   const visibleCalls = useMemo(() => {
     switch (filter) {
       case 'contacts':
-        return calls.filter((call) => call.hasContactClient);
+        return periodCalls.filter((call) => call.hasContactClient);
       case 'companies':
-        return calls.filter((call) => call.hasCompanyClient);
+        return periodCalls.filter((call) => call.hasCompanyClient);
       case 'noClient':
-        return calls.filter((call) => !call.hasClient);
+        return periodCalls.filter((call) => !call.hasClient);
       case 'noTarget':
-        return calls.filter((call) => !call.hasTarget);
+        return periodCalls.filter((call) => !call.hasTarget);
       case 'internal':
-        return calls.filter((call) => call.isInternal);
+        return periodCalls.filter((call) => call.isInternal);
       default:
-        return calls;
+        return periodCalls;
     }
-  }, [calls, filter]);
+  }, [periodCalls, filter]);
+
+  /** Пресет периода: ставим его границы и подсвечиваем кнопку. */
+  const applyPeriodPreset = (preset: PeriodPreset) => {
+    setPeriod(periodForPreset(preset));
+    setPeriodPreset(preset);
+  };
+
+  /** Ручной ввод даты: границу можно очистить, подсветка пресета снимается (решение 2.2). */
+  const changePeriodBound = (bound: 'from' | 'to', value: string) => {
+    setPeriod((current) => ({ ...current, [bound]: value || null }));
+    setPeriodPreset(null);
+  };
+
+  /** «Сбросить» — весь журнал: обе границы не заданы. */
+  const resetPeriod = () => {
+    setPeriod({ from: null, to: null });
+    setPeriodPreset(null);
+  };
 
   if (isLoading) {
     return <div style={{ padding: '8px', fontSize: '13px' }}>Загружаем журнал…</div>;
@@ -1090,6 +1235,16 @@ const CallsPage = () => {
     alignItems: 'center',
     width: '100%',
     boxSizing: 'border-box',
+  } as const;
+
+  const dateInputStyle = {
+    padding: '4px 8px',
+    borderRadius: '6px',
+    border: '1px solid rgba(128, 128, 128, 0.4)',
+    background: 'transparent',
+    color: 'inherit',
+    fontSize: '13px',
+    colorScheme: 'light dark',
   } as const;
 
   return (
@@ -1137,8 +1292,77 @@ const CallsPage = () => {
 
       <div style={{ opacity: 0.6, fontSize: '12px' }}>
         Нажмите на звонок — справа откроется панель звонка: клиент и цель, запись с расшифровкой,
-        открытые сделки. Показаны все звонки сотрудника, счётчики фильтров — по ним же.
+        открытые сделки. Показаны звонки за выбранный период; счётчики фильтров — по ним же.
       </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+        <span style={{ fontWeight: 600 }}>Период:</span>
+
+        {PERIOD_PRESETS.map(([key, label]) => {
+          const isActive = periodPreset === key;
+
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => applyPeriodPreset(key)}
+              style={{
+                padding: '4px 12px',
+                borderRadius: '999px',
+                border: `1px solid ${
+                  isActive ? 'rgba(128, 128, 128, 0.75)' : 'rgba(128, 128, 128, 0.35)'
+                }`,
+                background: isActive ? 'rgba(128, 128, 128, 0.22)' : 'transparent',
+                color: 'inherit',
+                cursor: 'pointer',
+                fontSize: '12.5px',
+                fontWeight: isActive ? 600 : 400,
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+
+        <span style={{ opacity: 0.75 }}>с</span>
+        <input
+          type="date"
+          value={period.from ?? ''}
+          onChange={(event) => changePeriodBound('from', event.target.value)}
+          style={dateInputStyle}
+        />
+        <span style={{ opacity: 0.75 }}>по</span>
+        <input
+          type="date"
+          value={period.to ?? ''}
+          onChange={(event) => changePeriodBound('to', event.target.value)}
+          style={dateInputStyle}
+        />
+
+        <button
+          type="button"
+          onClick={resetPeriod}
+          style={{
+            padding: '4px 12px',
+            borderRadius: '6px',
+            border: '1px solid rgba(128, 128, 128, 0.4)',
+            background: 'transparent',
+            color: 'inherit',
+            cursor: 'pointer',
+            fontSize: '12.5px',
+          }}
+        >
+          Сбросить
+        </button>
+
+        <span style={{ opacity: 0.7, fontSize: '12px' }}>{formatPeriodLabel(period)}</span>
+      </div>
+
+      {isPeriodInverted ? (
+        <div style={{ fontSize: '12px' }}>
+          Период задан наоборот: «с» позже «по». Поправьте даты или нажмите «Сбросить».
+        </div>
+      ) : null}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
         {(
@@ -1197,7 +1421,11 @@ const CallsPage = () => {
       </div>
 
       {visibleCalls.length === 0 && !isLoadingCalls ? (
-        <div style={{ opacity: 0.75 }}>Звонков не найдено</div>
+        <div style={{ opacity: 0.75 }}>
+          {period.from || period.to
+            ? 'Звонков за выбранный период не найдено'
+            : 'Звонков не найдено'}
+        </div>
       ) : null}
 
       {visibleCalls.map((call) => (
