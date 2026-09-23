@@ -109,20 +109,54 @@ const TARGET_FIELDS: { field: string; kind: LinkKind }[] = [
 ];
 
 /** Сделки: объект и путь к нему. */
-const DEAL_SOURCES: { kind: LinkKind; path: string; key: string }[] = [
-  { kind: 'opportunity', path: '/rest/opportunities', key: 'opportunities' },
+const DEAL_SOURCES: {
+  kind: LinkKind;
+  path: string;
+  key: string;
+  nameSingular: string;
+  label: string;
+}[] = [
+  {
+    kind: 'opportunity',
+    path: '/rest/opportunities',
+    key: 'opportunities',
+    nameSingular: 'opportunity',
+    label: 'Заказ',
+  },
   {
     kind: 'remont',
     path: '/rest/remontOborudovaniyas',
     key: 'remontOborudovaniyas',
+    nameSingular: 'remontOborudovaniya',
+    label: 'Ремонт',
   },
   {
     kind: 'zapravka',
     path: '/rest/zapravkaKartridzheys',
     key: 'zapravkaKartridzheys',
+    nameSingular: 'zapravkaKartridzhey',
+    label: 'Заправка',
   },
-  { kind: 'tender', path: '/rest/tendery', key: 'tendery' },
+  {
+    kind: 'tender',
+    path: '/rest/tendery',
+    key: 'tendery',
+    nameSingular: 'tender',
+    label: 'Тендер',
+  },
 ];
+
+/** Значение опции «В работе» в общем поле «Статус» сделок. */
+const ACTIVE_DEAL_STATUS = 'V_RABOTE';
+
+/** Сделка клиента для блока «Открытые сделки». */
+type DealRow = {
+  kind: LinkKind;
+  id: string;
+  name: string;
+  label: string;
+  nameSingular: string;
+};
 
 const DIRECTION_LABELS: Record<string, string> = {
   IN: 'Входящий',
@@ -255,6 +289,10 @@ const CallPanel = () => {
   const [call, setCall] = useState<CallInfo | null>(null);
   const [clientLinks, setClientLinks] = useState<LinkRow[]>([]);
   const [targetLinks, setTargetLinks] = useState<LinkRow[]>([]);
+  /** Открытые (в работе) сделки клиента звонка: и контакта, и его компании. */
+  const [deals, setDeals] = useState<DealRow[]>([]);
+  /** Какие сделки уже являются целью этого звонка — ключи `вид:id`. */
+  const [targetDealKeys, setTargetDealKeys] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -355,6 +393,77 @@ const CallPanel = () => {
       }
 
       return names;
+    },
+    [list],
+  );
+
+  /** Активные сделки клиента: обе ноги «Покупателя» — контакт и компания (решение 23.09.2026). */
+  const loadActiveDeals = useCallback(
+    async (personIds: string[], companyIds: string[]): Promise<DealRow[]> => {
+      const legs = [
+        ...personIds.map((id) => `pokupatelPersonId[eq]:"${id}"`),
+        ...companyIds.map((id) => `pokupatelCompanyId[eq]:"${id}"`),
+      ];
+
+      if (legs.length === 0) return [];
+
+      const buyerFilter = legs.length > 1 ? `or(${legs.join(',')})` : legs[0];
+      const filter = `${buyerFilter},status[eq]:"${ACTIVE_DEAL_STATUS}"`;
+      const found: DealRow[] = [];
+
+      for (const deal of DEAL_SOURCES) {
+        try {
+          const rows = await list<{ id?: string; name?: string | null }>(
+            `${deal.path}?filter=${encodeURIComponent(filter)}&limit=20&select=id,name`,
+            deal.key,
+          );
+
+          for (const row of rows) {
+            if (row.id) {
+              found.push({
+                kind: deal.kind,
+                id: String(row.id),
+                name: String(row.name ?? ''),
+                label: deal.label,
+                nameSingular: deal.nameSingular,
+              });
+            }
+          }
+        } catch {
+          // недоступный объект не должен ломать панель
+        }
+      }
+
+      return found;
+    },
+    [list],
+  );
+
+  /**
+   * Компании, к которым относится контакт: объект «Контакт клиента» связывает
+   * компанию с контактным лицом (`kontaktnoeLico` → `klientCompany`). Решение
+   * Алексея 23.09.2026: сделки таких компаний тоже показываем в панели.
+   */
+  const loadPersonCompanies = useCallback(
+    async (personIds: string[]): Promise<string[]> => {
+      if (personIds.length === 0) return [];
+
+      const legs = personIds.map((id) => `kontaktnoeLicoId[eq]:"${id}"`);
+      const filter = legs.length > 1 ? `or(${legs.join(',')})` : legs[0];
+
+      try {
+        const rows = await list<{ klientCompanyId?: string | null }>(
+          `/rest/kontaktyKlientov?filter=${encodeURIComponent(filter)}&limit=50&select=id,klientCompanyId`,
+          'kontaktyKlientov',
+        );
+
+        return rows
+          .map((row) => row.klientCompanyId)
+          .filter((id): id is string => typeof id === 'string' && id !== '');
+      } catch {
+        // недоступный объект не должен ломать панель
+        return [];
+      }
     },
     [list],
   );
@@ -507,12 +616,33 @@ const CallPanel = () => {
           };
         }),
       );
+
+      // Открытые сделки клиента: контакты + компании-участники + компании контакта
+      // (через «Контакты клиента»). Решение Алексея 23.09.2026.
+      const personCompanyIds = await loadPersonCompanies(personIds);
+      const clientCompanyIds = Array.from(new Set([...companyIds, ...personCompanyIds]));
+
+      setDeals(await loadActiveDeals(personIds, clientCompanyIds));
+
+      const targetKeys = new Set<string>();
+
+      for (const item of targets) {
+        for (const entry of TARGET_FIELDS) {
+          const value = item[entry.field];
+
+          if (value !== null && value !== undefined && String(value) !== '') {
+            targetKeys.add(`${entry.kind}:${String(value)}`);
+          }
+        }
+      }
+
+      setTargetDealKeys(targetKeys);
     } catch (loadError) {
       setError(describeError(loadError));
     } finally {
       setIsLoading(false);
     }
-  }, [recordId, api, list, loadNames]);
+  }, [recordId, api, list, loadNames, loadActiveDeals, loadPersonCompanies]);
 
   useEffect(() => {
     void load();
@@ -710,6 +840,60 @@ const CallPanel = () => {
     });
   }, [recordId]);
 
+  /** Клик по сделке — штатная карточка сделки поверх панели (со возвратом назад). */
+  const openDeal = useCallback((deal: DealRow) => {
+    void openSidePanelPage({
+      page: SidePanelPages.ViewRecord,
+      objectNameSingular: deal.nameSingular,
+      recordId: deal.id,
+    });
+  }, []);
+
+  /** Сделка становится целью звонка — тем же маршрутом, что и сопоставление цели. */
+  const linkDealAsTarget = async (deal: DealRow) => {
+    if (!call?.eventId) {
+      setError('У звонка нет события календаря — цель недоступна');
+
+      return;
+    }
+
+    setLinkBusy(true);
+    setLinkError('');
+
+    try {
+      const response = await api(`${functionsBase}/call-journal-link`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          action: 'linkTarget',
+          eventId: call.eventId,
+          callRecordingId: call.id,
+          title: call.title,
+          happensAt: call.startedAt ?? '',
+          kind: deal.kind,
+          targetId: deal.id,
+        }),
+      });
+      const json = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        created?: boolean;
+      };
+
+      if (!json.ok) throw new Error(json.error || 'не удалось привязать');
+
+      setNotice(
+        json.created === false
+          ? `Уже цель: ${deal.name || deal.label}`
+          : `Сделка — цель звонка: ${deal.name || deal.label}`,
+      );
+      await load();
+    } catch (linkErr) {
+      setLinkError(describeError(linkErr));
+    } finally {
+      setLinkBusy(false);
+    }
+  };
   const unlinkButton = (target: SearchTarget, row: LinkRow) => (
     <button
       type="button"
@@ -1025,6 +1209,75 @@ const CallPanel = () => {
           </button>
         )}
       </div>
+
+      {/* ── открытые сделки клиента ────────────────────────────────────── */}
+      {deals.length > 0 ? (
+        <div style={sectionStyle}>
+          <div style={{ fontWeight: 600 }}>Открытые сделки</div>
+
+          {deals.map((deal) => {
+            const key = `${deal.kind}:${deal.id}`;
+            const isTarget = targetDealKeys.has(key);
+
+            return (
+              <div
+                key={key}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => openDeal(deal)}
+                  title="Открыть сделку"
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'inherit',
+                    cursor: 'pointer',
+                    padding: 0,
+                    textAlign: 'left',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    textDecoration: 'underline',
+                    textDecorationStyle: 'dotted',
+                  }}
+                >
+                  {deal.label}: {deal.name || 'без названия'}
+                </button>
+
+                {isTarget ? (
+                  <span style={{ opacity: 0.7, fontSize: '12px', whiteSpace: 'nowrap' }}>
+                    ✓ цель
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={linkBusy}
+                    title="Сделать целью звонка"
+                    onClick={() => void linkDealAsTarget(deal)}
+                    style={{
+                      ...baseStyle,
+                      fontSize: '12px',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    ＋ цель
+                  </button>
+                )}
+              </div>
+            );
+          })}
+
+          {linkError ? (
+            <div style={{ color: '#e0736f', fontSize: '12px' }}>{linkError}</div>
+          ) : null}
+        </div>
+      ) : null}
 
       {linkError && searchFor === null ? (
         <div style={{ color: '#e0736f', fontSize: '12px' }}>{linkError}</div>
