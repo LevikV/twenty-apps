@@ -34,7 +34,7 @@ import { ensureCallLinks } from 'src/shared/megafon/link-call';
  */
 
 /** Режим задаётся при запуске: `{"mode":"dry"}` — только посчитать, `{"mode":"live"}` — писать. */
-type RunOptions = { mode?: string; reset?: boolean };
+type RunOptions = { mode?: string; reset?: boolean; step?: string };
 
 /** Размер порции: в сухом режиме только чтение, в боевом — с записью в CRM. */
 const PAUSE_MS = 400;
@@ -154,11 +154,148 @@ const readLogPhones = async (
   return { phone, ourNumber };
 };
 
+type ParticipantRow = {
+  id: string;
+  calendarEventId?: string | null;
+  companyId?: string | null;
+};
+
+type CompanyRow = {
+  id: string;
+  name?: string | null;
+  telefony?: {
+    primaryPhoneNumber?: string | null;
+    additionalPhones?: string[] | null;
+  } | null;
+};
+
+const CLEANUP_STATE_KEY = 'history:company-clients';
+
+/**
+ * Чистка «компаний-клиентов», привязанных не по номеру (миграция 22.09.2026).
+ *
+ * Раньше компания подтягивалась из карточки контакта («Контакт клиента») и
+ * становилась участником звонка. Теперь компания — клиент только если номер
+ * звонка совпал с телефоном компании; остальные привязки убираем (участник-контакт
+ * остаётся). Идём порциями, курсор — по id участника. `reset: true` — заново.
+ */
+const runCompanyCleanup = async (mode: 'dry' | 'live', reset: boolean) => {
+  const state = (await kv.get(CLEANUP_STATE_KEY)) as State | null;
+
+  const current: State = {
+    mode,
+    cursor: reset ? '' : state?.cursor ?? '',
+    processed: reset ? 0 : state?.processed ?? 0,
+    stats: reset ? {} : state?.stats ?? {},
+    errors: state?.errors ?? [],
+    updatedAt: new Date().toISOString(),
+  };
+
+  const count = (key: string) => {
+    current.stats[key] = (current.stats[key] ?? 0) + 1;
+  };
+
+  let rows: ParticipantRow[] = [];
+
+  try {
+    const response = await client.get<unknown>('/rest/calendarEventParticipants', {
+      query: {
+        filter: current.cursor
+          ? `companyId[is]:NOT_NULL,id[gt]:"${current.cursor}"`
+          : 'companyId[is]:NOT_NULL',
+        limit: 30,
+        select: 'id,calendarEventId,companyId',
+      },
+    });
+
+    rows = rowsOf<ParticipantRow>(response, 'calendarEventParticipants');
+  } catch (error) {
+    current.errors = [`чтение участников: ${describeError(error)}`, ...current.errors].slice(0, 5);
+    current.updatedAt = new Date().toISOString();
+    await kv.set(CLEANUP_STATE_KEY, current);
+
+    return current;
+  }
+
+  for (const row of rows) {
+    current.processed += 1;
+    current.cursor = row.id;
+
+    try {
+      const eventId = String(row.calendarEventId ?? '');
+      const companyResponse = await client.get<unknown>(`/rest/companies/${row.companyId}`);
+      const company = (companyResponse as { data?: { company?: CompanyRow } })?.data?.company;
+      const callResponse = await client.get<unknown>('/rest/callRecordings', {
+        query: { filter: `calendarEventId[eq]:"${eventId}"`, limit: 1 },
+      });
+      const call = rowsOf<CallRow>(callResponse, 'callRecordings')[0];
+      // Номер клиента берём из журнала вебхуков: в заголовке звонка стоит ИМЯ
+      // найденного контакта, а не номер. Заголовок — только запасной путь.
+      const { phone: logPhone } = await readLogPhones(String(call?.externalRecordingId ?? ''));
+      const callNumber = logPhone || digits10(call?.title);
+
+      const phones = new Set<string>();
+      const primary = digits10(company?.telefony?.primaryPhoneNumber);
+
+      if (primary) phones.add(primary);
+
+      (company?.telefony?.additionalPhones ?? []).forEach((phone) => {
+        const value = digits10(phone);
+
+        if (value) phones.add(value);
+      });
+
+      if (callNumber && phones.has(callNumber)) {
+        count('оставлено (номер компании)');
+        continue;
+      }
+
+      // вместе с привязкой убираем запись ленты компании по этому звонку
+      const timelineResponse = await client.get<unknown>('/rest/timelineActivities', {
+        query: { filter: `targetCompanyId[eq]:"${row.companyId}",linkedRecordId[eq]:"${call?.id ?? ''}"`, limit: 20 },
+      });
+      const timelineRows = rowsOf<{ id: string }>(timelineResponse, 'timelineActivities');
+
+      for (const entry of timelineRows) {
+        if (mode === 'live') {
+          await client.delete(`/rest/timelineActivities/${entry.id}`);
+          count('снята запись ленты компании');
+        } else {
+          count('будет снята запись ленты компании');
+        }
+      }
+
+      if (mode === 'live') {
+        await client.delete(`/rest/calendarEventParticipants/${row.id}`);
+        count('снята привязка компании');
+      } else {
+        count('будет снята привязка компании');
+      }
+    } catch (error) {
+      current.errors = [`участник ${row.id}: ${describeError(error)}`, ...current.errors].slice(0, 5);
+      count('ошибок');
+    }
+
+    if (PAUSE_MS > 0) await sleep(PAUSE_MS);
+  }
+
+  current.updatedAt = new Date().toISOString();
+
+  await kv.set(CLEANUP_STATE_KEY, current);
+
+  return current;
+};
+
 const handler = async (event?: RunOptions & { body?: RunOptions }) => {
   // функция запускается либо напрямую (payload), либо по служебному HTTP-маршруту
   const options: RunOptions = (event?.body ?? event ?? {}) as RunOptions;
   const mode: 'dry' | 'live' = options.mode === 'dry' ? 'dry' : 'live';
   const portion = 40;
+
+  // отдельный проход: снять компании-клиенты, привязанные не по номеру
+  if (String(options.step ?? '') === 'company-clients') {
+    return await runCompanyCleanup(mode, Boolean(options.reset));
+  }
 
   const state = (await kv.get(STATE_KEY)) as State | null;
 

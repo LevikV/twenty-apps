@@ -5,10 +5,11 @@ import { lookupEmployeeByOurNumber } from 'src/shared/megafon/employee-lookup';
 /**
  * Поиск клиента и компании по номеру телефона.
  *
- * Правило привязки компании (решение Алексея, 18.09): у человека должна быть
- * ровно одна запись «Контакт клиента» с компанией — тогда привязываем её.
- * Если связей несколько — не привязываем вовсе: ложная привязка в ленту чужой
- * компании хуже, чем её отсутствие. Резервный путь — компания по телефону.
+ * Контакт — по номеру. Компания — **только** если номер звонка совпал с телефоном
+ * компании (`company.telefony`). Связь «Контакт клиента» для привязки компании
+ * не используем: звонок с личного номера человека не означает, что он про его
+ * компанию (решение Алексея, 22.09.2026). Раньше компания подтягивалась по
+ * «Контакту клиента» — это давало ложные привязки.
  */
 
 const client = new RestApiClient();
@@ -21,12 +22,6 @@ type PersonRecord = {
 type CompanyRecord = {
   id: string;
   name?: string | null;
-};
-
-type KontaktKlientaRecord = {
-  id: string;
-  klientCompanyId?: string | null;
-  klientPersonId?: string | null;
 };
 
 export type ClientLookup = {
@@ -101,42 +96,6 @@ export const findPersonByPhone = async (
   return { ambiguous: people.length > 1 };
 };
 
-/**
- * Компания человека через «Контакт клиента».
- * Ровно одна связь с компанией → привязываем; несколько связей → не привязываем.
- */
-export const findCompanyForPerson = async (
-  personId: string,
-): Promise<{ companyId: string; ambiguous: boolean }> => {
-  if (!personId) return { companyId: '', ambiguous: false };
-
-  const response = await client.get<unknown>('/rest/kontaktyKlientov', {
-    query: { filter: `kontaktnoeLicoId[eq]:"${personId}"`, limit: 50 },
-  });
-
-  const rows = dataOf<KontaktKlientaRecord>(response, 'kontaktyKlientov');
-
-  if (rows.length === 0) return { companyId: '', ambiguous: false };
-
-  if (rows.length === 1) {
-    return { companyId: String(rows[0].klientCompanyId ?? ''), ambiguous: false };
-  }
-
-  return { companyId: '', ambiguous: true };
-};
-
-/** Компания по идентификатору — нужна, чтобы показать название в логе и заголовке. */
-export const findCompanyById = async (companyId: string): Promise<CompanyRecord | undefined> => {
-  if (!companyId) return undefined;
-
-  const response = await client.get<unknown>(`/rest/companies/${companyId}`);
-
-  const data = (response as { data?: Record<string, unknown> })?.data;
-  const company = data?.company;
-
-  return company && typeof company === 'object' ? (company as CompanyRecord) : undefined;
-};
-
 /** Резерв: компания, у которой этот номер указан как телефон. */
 export const findCompanyByPhone = async (
   phone: string,
@@ -186,28 +145,18 @@ export const lookupClientByPhone = async (phone: string): Promise<ClientLookup> 
   result.personId = person.id;
   result.personName = personDisplayName(person);
 
-  const { companyId, ambiguous } = await findCompanyForPerson(person.id);
+  // Компания — клиент звонка ТОЛЬКО если номер звонка совпал с телефоном компании.
+  // Связь «Контакт клиента» для привязки больше не используем: звонок с личного
+  // номера человека не значит, что он про его компанию (решение Алексея, 22.09.2026).
+  const companyByPhone = await findCompanyByPhone(phone);
 
-  if (companyId) {
-    result.companyId = companyId;
-    result.companySource = 'kontakt-klienta';
-
-    const company = await findCompanyById(companyId);
-
-    result.companyName = String(company?.name ?? '');
-  } else if (ambiguous) {
-    // связей несколько — компанию не привязываем вовсе (не гадаем)
-    result.ambiguous = true;
-  } else {
-    const fallback = await findCompanyByPhone(phone);
-
-    if (fallback.company) {
-      result.companyId = fallback.company.id;
-      result.companyName = String(fallback.company.name ?? '');
-      result.companySource = 'company-phone';
-    }
-    result.ambiguous = fallback.ambiguous;
+  if (companyByPhone.company) {
+    result.companyId = companyByPhone.company.id;
+    result.companyName = String(companyByPhone.company.name ?? '');
+    result.companySource = 'company-phone';
   }
+
+  result.ambiguous = companyByPhone.ambiguous;
 
   await applyInternalFallback(result, phone);
 
