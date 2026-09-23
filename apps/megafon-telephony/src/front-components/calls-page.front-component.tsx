@@ -2,7 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { SidePanelPages, openSidePanelPage, useUserId } from 'twenty-sdk/front-component';
 
-import { CALLS_PAGE_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
+import { CALLS_PAGE_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER, CALL_PANEL_PROBE_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 import {
   normalizeAccessRules,
   resolveMemberVisibility,
@@ -978,12 +978,84 @@ const CallsPage = () => {
     openCall(recordId);
   };
 
+  /**
+   * Разведка (этап 1): id компонента нашей боковой панели.
+   *
+   * В песочнице известен только universalIdentifier компонента, а панели нужен
+   * его uuid — берём из метаданных (`frontComponents`) и кэшируем на время жизни
+   * страницы. Запрос идёт тем же токеном приложения, что и остальные.
+   */
+  const panelComponentIdRef = useRef<string | null>(null);
+
+  const resolvePanelComponentId = useCallback(async (): Promise<string> => {
+    if (panelComponentIdRef.current) {
+      return panelComponentIdRef.current;
+    }
+
+    const response = await api('/metadata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: '{ frontComponents { id name universalIdentifier } }',
+      }),
+    });
+
+    const json = (await response.json()) as {
+      data?: {
+        frontComponents?: Array<{ id?: string; universalIdentifier?: string }>;
+      };
+      errors?: Array<{ message?: string }>;
+    };
+
+    const row = (json?.data?.frontComponents ?? []).find(
+      (item) =>
+        item.universalIdentifier ===
+        CALL_PANEL_PROBE_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER,
+    );
+
+    if (!row?.id) {
+      throw new Error(
+        `компонент панели не найден в метаданных${
+          json?.errors?.[0]?.message ? `: ${json.errors[0].message}` : ''
+        }`,
+      );
+    }
+
+    panelComponentIdRef.current = row.id;
+
+    return row.id;
+  }, [api]);
+
   const openCall = (recordId: string) => {
-    openSidePanelPage({
-      page: SidePanelPages.ViewRecord,
-      recordId,
-      objectNameSingular: 'callRecording',
-    }).catch((openError) => setError(describeError(openError)));
+    void (async () => {
+      try {
+        const panelComponentId = await resolvePanelComponentId();
+
+        await openSidePanelPage({
+          page: SidePanelPages.ViewFrontComponent,
+          frontComponentId: panelComponentId,
+          recordId,
+          objectNameSingular: 'callRecording',
+          pageTitle: 'Звонок',
+          pageIcon: 'IconPhone',
+        });
+
+        return;
+      } catch (panelError) {
+        console.error(
+          'call-journal: не удалось открыть свою панель звонка',
+          panelError,
+        );
+        setError(`Панель звонка: ${describeError(panelError)}`);
+      }
+
+      // Резерв: пока идёт разведка, журнал не должен ломаться из-за панели.
+      openSidePanelPage({
+        page: SidePanelPages.ViewRecord,
+        recordId,
+        objectNameSingular: 'callRecording',
+      }).catch((openError) => setError(describeError(openError)));
+    })();
   };
 
   // ── ручное сопоставление: клиент (участник) и цель (цель события) ──────────

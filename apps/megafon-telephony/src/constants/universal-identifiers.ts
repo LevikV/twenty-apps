@@ -114,6 +114,16 @@ export const CALLS_ACCESS_SETTINGS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
   '7b39ad25-666c-4ea4-918f-b36577855da5';
 
 /**
+ * Разведка (этап 1, 23.09.2026): заглушка боковой панели звонка.
+ *
+ * Журнал открывает её страницей `ViewFrontComponent` — то есть в штатной правой
+ * панели Twenty рендерится наш компонент. Id компонента (uuid) журнал резолвит
+ * по этому universalIdentifier через запрос метаданных `frontComponents`.
+ */
+export const CALL_PANEL_PROBE_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
+  '19b484f4-e5f8-4480-bc69-8c02b837e6ad';
+
+/**
  * Правила доступа к журналу звонков: хранятся в kv приложения,
  * читаются и пишутся через эти два маршрута.
  */
