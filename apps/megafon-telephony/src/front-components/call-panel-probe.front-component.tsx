@@ -43,6 +43,17 @@ type SearchItem = { id: string; title: string; subtitle: string };
 
 type LinkRow = { id: string; label: string };
 
+/** Расшифровка: сегмент — непрерывный фрагмент одного канала («Канал 0» / «Канал 1»). */
+type TranscriptWord = {
+  text?: string;
+  start_timestamp?: { relative?: number } | null;
+};
+
+type TranscriptSegment = {
+  words?: TranscriptWord[];
+  participant?: { name?: string } | null;
+};
+
 type CallInfo = {
   id: string;
   title: string;
@@ -51,7 +62,7 @@ type CallInfo = {
   direction: string | null;
   result: string | null;
   audioUrl: string | null;
-  transcriptRows: number;
+  transcript: TranscriptSegment[];
   eventId: string;
   phone: string;
 };
@@ -182,6 +193,16 @@ const formatDuration = (startedAt: string | null, endedAt: string | null) => {
   return `${minutes} мин ${String(seconds % 60).padStart(2, '0')} с`;
 };
 
+/** Таймкод расшифровки: секунды от начала записи → «мм:сс». */
+const formatStamp = (seconds?: number): string => {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return '';
+
+  const total = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(total / 60);
+
+  return `${minutes}:${String(total % 60).padStart(2, '0')}`;
+};
+
 const baseStyle = {
   background: 'transparent',
   border: '1px solid rgba(128, 128, 128, 0.5)',
@@ -246,6 +267,8 @@ const CallPanel = () => {
   const [linkError, setLinkError] = useState('');
   const [notice, setNotice] = useState('');
   const [searchPerformed, setSearchPerformed] = useState(false);
+  /** Расшифровка свёрнута, пока пользователь не раскрыл её. */
+  const [showAllTranscript, setShowAllTranscript] = useState(false);
   const [pendingUnlink, setPendingUnlink] = useState<string | null>(null);
 
   const api = useCallback(
@@ -446,7 +469,9 @@ const CallPanel = () => {
         direction: row.napravlenie ?? null,
         result: row.itog ?? null,
         audioUrl: row.audio?.[0]?.url ?? row.video?.[0]?.url ?? null,
-        transcriptRows: Array.isArray(row.transcript) ? row.transcript.length : 0,
+        transcript: Array.isArray(row.transcript)
+          ? (row.transcript as TranscriptSegment[])
+          : [],
         eventId,
         phone,
       });
@@ -842,6 +867,40 @@ const CallPanel = () => {
     </div>
   );
 
+  /**
+   * Расшифровка: сегменты идут в порядке разговора, каждый — непрерывный кусок
+   * одного канала. Подписи оставляем как есть — «Канал 0» / «Канал 1» (решение
+   * Алексея 23.09.2026).
+   */
+  const transcriptLines = useMemo(
+    () =>
+      (call?.transcript ?? [])
+        .map((segment, index) => {
+          const words = segment.words ?? [];
+          const time = formatStamp(words[0]?.start_timestamp?.relative);
+          const text = words
+            .map((word) => String(word?.text ?? ''))
+            .join(' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+          return {
+            id: `${index}-${time}`,
+            speaker: segment.participant?.name ?? '',
+            time,
+            text,
+          };
+        })
+        .filter((line) => line.text !== ''),
+    [call],
+  );
+
+  const transcriptChars = transcriptLines.reduce(
+    (sum, line) => sum + line.text.length,
+    0,
+  );
+  const canCollapseTranscript = transcriptChars > 700;
+
   if (isLoading) {
     return <div style={{ padding: '12px', opacity: 0.75 }}>Загрузка…</div>;
   }
@@ -973,17 +1032,53 @@ const CallPanel = () => {
 
       {/* ── запись ─────────────────────────────────────────────────────── */}
       <div style={sectionStyle}>
-        <div style={{ fontWeight: 600 }}>Запись</div>
+        <div style={{ fontWeight: 600 }}>Запись и расшифровка</div>
         {call.audioUrl ? (
           <audio controls src={call.audioUrl} style={{ width: '100%' }} />
         ) : (
           <div style={{ opacity: 0.7 }}>Файла записи нет</div>
         )}
-        <div style={{ opacity: 0.7, fontSize: '12px' }}>
-          {call.transcriptRows
-            ? `Расшифровка: ${call.transcriptRows} реплик`
-            : 'Расшифровки нет'}
-        </div>
+
+        {transcriptLines.length === 0 ? (
+          <div style={{ opacity: 0.7 }}>Расшифровки нет</div>
+        ) : (
+          <>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+                maxHeight: showAllTranscript ? '460px' : '170px',
+                overflowY: 'auto',
+              }}
+            >
+              {transcriptLines.map((line) => (
+                <div
+                  key={line.id}
+                  style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}
+                >
+                  <div style={{ opacity: 0.65, fontSize: '11.5px' }}>
+                    {line.speaker || 'Расшифровка'}
+                    {line.time ? ` · ${line.time}` : ''}
+                  </div>
+                  <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {line.text}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {canCollapseTranscript ? (
+              <button
+                type="button"
+                onClick={() => setShowAllTranscript((value) => !value)}
+                style={{ ...baseStyle, alignSelf: 'flex-start' }}
+              >
+                {showAllTranscript ? 'Свернуть расшифровку' : 'Показать всю расшифровку'}
+              </button>
+            ) : null}
+          </>
+        )}
       </div>
 
       <button
