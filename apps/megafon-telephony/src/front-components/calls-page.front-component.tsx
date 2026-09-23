@@ -50,6 +50,10 @@ type CallRow = {
   audioUrl: string | null;
   /** Номер сопоставлен с контактом или компанией. */
   hasClient: boolean;
+  /** В «Клиенте» есть участник-контакт (физлицо). */
+  hasContactClient: boolean;
+  /** В «Клиенте» есть участник-компания. */
+  hasCompanyClient: boolean;
   /** В событии есть хотя бы одна цель: человек, компания или сделка. */
   hasTarget: boolean;
   /** Вторая сторона — наш сотрудник (звонок внутри). */
@@ -95,7 +99,7 @@ const SEARCH_SOURCES: Record<
   tender: { path: '/rest/tendery', key: 'tendery', select: 'id,name' },
 };
 
-type FilterKey = 'all' | 'noClient' | 'noTarget' | 'internal';
+type FilterKey = 'all' | 'contacts' | 'companies' | 'noClient' | 'noTarget' | 'internal';
 
 type ApiList<T> = {
   data?: Record<string, T[] | undefined>;
@@ -899,6 +903,8 @@ const CallsPage = () => {
               phoneFromTitle(record.title ?? null),
             audioUrl: record.audio?.[0]?.url ?? null,
             hasClient: personIds.length > 0 || participantCompanyIds.length > 0,
+            hasContactClient: personIds.length > 0,
+            hasCompanyClient: participantCompanyIds.length > 0,
             hasTarget: targetParts.length > 0,
             isInternal: personIds.length === 0 && participantCompanyIds.length === 0 && isOwnNumber,
             eventId,
@@ -1181,6 +1187,8 @@ const CallsPage = () => {
   const filterCounts = useMemo(
     () => ({
       all: calls.length,
+      contacts: calls.filter((call) => call.hasContactClient).length,
+      companies: calls.filter((call) => call.hasCompanyClient).length,
       noClient: calls.filter((call) => !call.hasClient).length,
       noTarget: calls.filter((call) => !call.hasTarget).length,
       internal: calls.filter((call) => call.isInternal).length,
@@ -1190,6 +1198,10 @@ const CallsPage = () => {
 
   const visibleCalls = useMemo(() => {
     switch (filter) {
+      case 'contacts':
+        return calls.filter((call) => call.hasContactClient);
+      case 'companies':
+        return calls.filter((call) => call.hasCompanyClient);
       case 'noClient':
         return calls.filter((call) => !call.hasClient);
       case 'noTarget':
@@ -1315,6 +1327,8 @@ const CallsPage = () => {
         {(
           [
             ['all', 'Все'],
+            ['contacts', 'Контакты'],
+            ['companies', 'Компании'],
             ['noClient', 'Нет клиента'],
             ['noTarget', 'Нет цели'],
             ['internal', 'Внутренние'],
