@@ -136,11 +136,17 @@ export const updateCallRecording = async (callId: string, parsed: ParsedCall): P
   if (parsed.direction) body.napravlenie = parsed.direction;
   if (parsed.outcome) body.itog = parsed.outcome;
   if (parsed.recordingUrl) body.ssylkaNaZapis = parsed.recordingUrl;
-  if (parsed.startedAtIso) body.startedAt = parsed.startedAtIso;
-  if (parsed.endedAtIso) body.endedAt = parsed.endedAtIso;
 
-  // финальный статус записи ставим только по итоговому хуку history
-  if (parsed.stage === 'FINISHED') body.status = parsed.recordingStatus;
+  // Время начала/конца и финальный статус — только по итоговому хуку `history`.
+  // Длительность ВАТС присылает исключительно в нём; промежуточный `COMPLETED` приходит
+  // почти одновременно (разница в миллисекундах), длительности не содержит и своим временем
+  // затирал правильный конец — в журнале длительность становилась нулевой (разобрано 23.09.2026).
+  if (parsed.stage === 'FINISHED') {
+    if (parsed.startedAtIso) body.startedAt = parsed.startedAtIso;
+    if (parsed.endedAtIso) body.endedAt = parsed.endedAtIso;
+
+    body.status = parsed.recordingStatus;
+  }
 
   if (Object.keys(body).length === 0) return;
 

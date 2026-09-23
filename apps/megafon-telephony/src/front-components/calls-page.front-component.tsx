@@ -127,6 +127,12 @@ const formatDuration = (startedAt: string | null, endedAt: string | null) => {
     Math.round((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1000),
   );
 
+  // Ноль означает «нет данных о длительности» (запись не состоялась либо время не пришло
+  // от ВАТС) — честнее показать прочерк, чем «0:00» (решение Алексея 23.09.2026).
+  if (seconds === 0) {
+    return '—';
+  }
+
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 };
 
