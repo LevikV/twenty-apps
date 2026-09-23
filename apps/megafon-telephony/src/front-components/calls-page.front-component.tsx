@@ -1059,12 +1059,15 @@ const CallsPage = () => {
 
         if (digits.length >= 4) {
           conditions.push(`phones.primaryPhoneNumber[ilike]:%${digits}%`);
+          // дополнительные телефоны: для RAW_JSON доступен только `like`
+          conditions.push(`phones.additionalPhones[like]:%${digits}%`);
         }
       } else if (searchKind === 'company') {
         conditions.push(`name[ilike]:%${text}%`);
 
         if (digits.length >= 4) {
           conditions.push(`telefony.primaryPhoneNumber[ilike]:%${digits}%`);
+          conditions.push(`telefony.additionalPhones[like]:%${digits}%`);
         }
       } else {
         conditions.push(`name[ilike]:%${text}%`);

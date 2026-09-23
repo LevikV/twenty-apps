@@ -10,6 +10,11 @@ import { lookupEmployeeByOurNumber } from 'src/shared/megafon/employee-lookup';
  * не используем: звонок с личного номера человека не означает, что он про его
  * компанию (решение Алексея, 22.09.2026). Раньше компания подтягивалась по
  * «Контакту клиента» — это давало ложные привязки.
+ *
+ * Смотрим **и основное, и дополнительные** телефоны карточки (23.09.2026):
+ * в Twenty телефоны — составное поле, где дополнительных может быть несколько.
+ * Оператор `eq` для них запрещён (`RAW_JSON`, разрешены `is` и `like`), поэтому
+ * дополнительные ищем через `like` по 10 цифрам.
  */
 
 const client = new RestApiClient();
@@ -79,34 +84,75 @@ const applyInternalFallback = async (result: ClientLookup, phone: string): Promi
   }
 };
 
-/** Контакт по номеру телефона (10 цифр). Несколько совпадений — считаем неоднозначностью. */
+/**
+ * Записи, у которых номер указан основным **или** дополнительным телефоном.
+ *
+ * Основное поле в приоритете: если номер нашёлся там, дополнительные не смотрим —
+ * иначе номер, продублированный в чужой карточке как дополнительный, дал бы
+ * «неоднозначность» и клиент перестал бы привязываться (таких номеров в базе 66).
+ */
+const findByPhone = async <T extends { id: string }>(params: {
+  path: string;
+  key: string;
+  field: 'phones' | 'telefony';
+  phone: string;
+}): Promise<T[]> => {
+  const { path, key, field, phone } = params;
+
+  const byPrimary = dataOf<T>(
+    await client.get<unknown>(path, {
+      query: { filter: `${field}.primaryPhoneNumber[eq]:"${phone}"`, limit: 3 },
+    }),
+    key,
+  );
+
+  if (byPrimary.length > 0) return byPrimary;
+
+  // для RAW_JSON доступен только `like`; результаты объединяем по id
+  const byAdditional = dataOf<T>(
+    await client.get<unknown>(path, {
+      query: { filter: `${field}.additionalPhones[like]:"%${phone}%"`, limit: 3 },
+    }),
+    key,
+  );
+
+  const byId = new Map<string, T>();
+
+  for (const record of byAdditional) byId.set(record.id, record);
+
+  return [...byId.values()];
+};
+
+/** Контакт по номеру (10 цифр): основное поле + дополнительные. Несколько совпадений — неоднозначность. */
 export const findPersonByPhone = async (
   phone: string,
 ): Promise<{ person?: PersonRecord; ambiguous: boolean }> => {
   if (!phone) return { ambiguous: false };
 
-  const response = await client.get<unknown>('/rest/people', {
-    query: { filter: `phones.primaryPhoneNumber[eq]:"${phone}"`, limit: 3 },
+  const people = await findByPhone<PersonRecord>({
+    path: '/rest/people',
+    key: 'people',
+    field: 'phones',
+    phone,
   });
-
-  const people = dataOf<PersonRecord>(response, 'people');
 
   if (people.length === 1) return { person: people[0], ambiguous: false };
 
   return { ambiguous: people.length > 1 };
 };
 
-/** Резерв: компания, у которой этот номер указан как телефон. */
+/** Компания, у которой этот номер указан телефоном: основное поле + дополнительные. */
 export const findCompanyByPhone = async (
   phone: string,
 ): Promise<{ company?: CompanyRecord; ambiguous: boolean }> => {
   if (!phone) return { ambiguous: false };
 
-  const response = await client.get<unknown>('/rest/companies', {
-    query: { filter: `telefony.primaryPhoneNumber[eq]:"${phone}"`, limit: 3 },
+  const companies = await findByPhone<CompanyRecord>({
+    path: '/rest/companies',
+    key: 'companies',
+    field: 'telefony',
+    phone,
   });
-
-  const companies = dataOf<CompanyRecord>(response, 'companies');
 
   if (companies.length === 1) return { company: companies[0], ambiguous: false };
 
