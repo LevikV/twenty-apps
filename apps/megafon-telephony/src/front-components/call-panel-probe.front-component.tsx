@@ -41,7 +41,22 @@ type LinkKind =
 
 type SearchItem = { id: string; title: string; subtitle: string };
 
-type LinkRow = { id: string; label: string };
+/** Чей покупатель у сделки: контакт, компания, обе ноги или не заполнен. */
+type DealOwner = 'person' | 'company' | 'both' | 'none';
+
+/** Подпись сделки: чей покупатель, название компании и дата создания. */
+type DealOwnerInfo = {
+  kind: LinkKind;
+  refId: string;
+  owner: DealOwner;
+  /** id компании-покупателя (когда покупатель — компания). */
+  companyId: string | null;
+  /** Название компании-покупателя — только когда покупатель компания. */
+  ownerName: string;
+  createdAt: string | null;
+};
+
+type LinkRow = { id: string; label: string; deal?: DealOwnerInfo };
 
 /** Расшифровка: сегмент — непрерывный фрагмент одного канала («Канал 0» / «Канал 1»). */
 type TranscriptWord = {
@@ -156,6 +171,12 @@ type DealRow = {
   name: string;
   label: string;
   nameSingular: string;
+  /** Чей это сделка: контакт звонка, его компания или обе ноги «Покупателя». */
+  owner: DealOwner;
+  /** Название компании-покупателя — только когда покупатель компания. */
+  ownerName: string;
+  /** Дата создания сделки (ISO). */
+  createdAt: string | null;
 };
 
 const DIRECTION_LABELS: Record<string, string> = {
@@ -225,6 +246,63 @@ const formatDuration = (startedAt: string | null, endedAt: string | null) => {
   const minutes = Math.floor(seconds / 60);
 
   return `${minutes} мин ${String(seconds % 60).padStart(2, '0')} с`;
+};
+
+/** Дата создания сделки в панели: ISO → «дд.мм.гггг». */
+const formatDay = (iso?: string | null): string => {
+  if (!iso) return '';
+
+  const date = new Date(iso);
+
+  if (Number.isNaN(date.getTime())) return '';
+
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+
+  return `${day}.${month}.${date.getFullYear()}`;
+};
+
+/** Подпись под названием сделки: «компания: НКО-РОКР · создана 23.09.2026». */
+const dealSubtitle = (info: {
+  owner: DealOwner;
+  ownerName: string;
+  createdAt: string | null;
+}): string => {
+  // Длинные названия компаний режем — подпись должна оставаться короткой.
+  const ownerName =
+    info.ownerName.length > 26 ? `${info.ownerName.slice(0, 26).trimEnd()}…` : info.ownerName;
+
+  const who =
+    info.owner === 'person'
+      ? 'контакт'
+      : info.owner === 'company'
+        ? ownerName
+          ? `компания: ${ownerName}`
+          : 'компания'
+        : info.owner === 'both'
+          ? ownerName
+            ? `контакт + компания: ${ownerName}`
+            : 'контакт + компания'
+          : 'покупатель не указан';
+
+  const created = formatDay(info.createdAt);
+
+  return created ? `${who} · создана ${created}` : who;
+};
+
+/** Чей покупатель у сделки — по заполненным полям «Покупателя». */
+const describeDealOwner = (row: {
+  pokupatelPersonId?: string | null;
+  pokupatelCompanyId?: string | null;
+}): DealOwner => {
+  const hasPerson = typeof row.pokupatelPersonId === 'string' && row.pokupatelPersonId !== '';
+  const hasCompany = typeof row.pokupatelCompanyId === 'string' && row.pokupatelCompanyId !== '';
+
+  if (hasPerson && hasCompany) return 'both';
+  if (hasPerson) return 'person';
+  if (hasCompany) return 'company';
+
+  return 'none';
 };
 
 /** Таймкод расшифровки: секунды от начала записи → «мм:сс». */
@@ -399,7 +477,11 @@ const CallPanel = () => {
 
   /** Активные сделки клиента: обе ноги «Покупателя» — контакт и компания (решение 23.09.2026). */
   const loadActiveDeals = useCallback(
-    async (personIds: string[], companyIds: string[]): Promise<DealRow[]> => {
+    async (
+      personIds: string[],
+      companyIds: string[],
+      names: Map<string, string>,
+    ): Promise<DealRow[]> => {
       const legs = [
         ...personIds.map((id) => `pokupatelPersonId[eq]:"${id}"`),
         ...companyIds.map((id) => `pokupatelCompanyId[eq]:"${id}"`),
@@ -413,21 +495,35 @@ const CallPanel = () => {
 
       for (const deal of DEAL_SOURCES) {
         try {
-          const rows = await list<{ id?: string; name?: string | null }>(
-            `${deal.path}?filter=${encodeURIComponent(filter)}&limit=20&select=id,name`,
+          const rows = await list<{
+            id?: string;
+            name?: string | null;
+            createdAt?: string | null;
+            pokupatelPersonId?: string | null;
+            pokupatelCompanyId?: string | null;
+          }>(
+            `${deal.path}?filter=${encodeURIComponent(filter)}&limit=20&select=id,name,createdAt,pokupatelPersonId,pokupatelCompanyId`,
             deal.key,
           );
 
           for (const row of rows) {
-            if (row.id) {
-              found.push({
-                kind: deal.kind,
-                id: String(row.id),
-                name: String(row.name ?? ''),
-                label: deal.label,
-                nameSingular: deal.nameSingular,
-              });
-            }
+            if (!row.id) continue;
+
+            const owner = describeDealOwner(row);
+
+            found.push({
+              kind: deal.kind,
+              id: String(row.id),
+              name: String(row.name ?? ''),
+              label: deal.label,
+              nameSingular: deal.nameSingular,
+              owner,
+              ownerName:
+                owner === 'person'
+                  ? ''
+                  : names.get(String(row.pokupatelCompanyId ?? '')) ?? '',
+              createdAt: row.createdAt ?? null,
+            });
           }
         } catch {
           // недоступный объект не должен ломать панель
@@ -464,6 +560,65 @@ const CallPanel = () => {
         // недоступный объект не должен ломать панель
         return [];
       }
+    },
+    [list],
+  );
+
+  /**
+   * Подписи сделок-целей: чей покупатель, название компании и дата создания. Цель может быть
+   * и не «в работе», поэтому запрашиваем по id без фильтра по статусу.
+   */
+  const loadDealFacts = useCallback(
+    async (
+      refs: { kind: LinkKind; id: string }[],
+      names: Map<string, string>,
+    ): Promise<Map<string, DealOwnerInfo>> => {
+      const facts = new Map<string, DealOwnerInfo>();
+
+      for (const deal of DEAL_SOURCES) {
+        const ids = refs
+          .filter((item) => item.kind === deal.kind)
+          .map((item) => item.id);
+
+        if (ids.length === 0) continue;
+
+        try {
+          const rows = await list<{
+            id?: string;
+            createdAt?: string | null;
+            pokupatelPersonId?: string | null;
+            pokupatelCompanyId?: string | null;
+          }>(
+            `${deal.path}?filter=${encodeURIComponent(
+              `id[in]:[${ids.join(',')}]`,
+            )}&limit=60&select=id,createdAt,pokupatelPersonId,pokupatelCompanyId`,
+            deal.key,
+          );
+
+          for (const row of rows) {
+            if (!row.id) continue;
+
+            const owner = describeDealOwner(row);
+
+            facts.set(`${deal.kind}:${row.id}`, {
+              kind: deal.kind,
+              refId: String(row.id),
+              owner,
+              companyId:
+                owner === 'person' ? null : row.pokupatelCompanyId ?? null,
+              ownerName:
+                owner === 'person'
+                  ? ''
+                  : names.get(String(row.pokupatelCompanyId ?? '')) ?? '',
+              createdAt: row.createdAt ?? null,
+            });
+          }
+        } catch {
+          // недоступный объект не должен ломать панель
+        }
+      }
+
+      return facts;
     },
     [list],
   );
@@ -564,7 +719,46 @@ const CallPanel = () => {
           .filter((entry) => entry.id),
       );
 
-      const names = await loadNames({ personIds, companyIds, deals });
+      // Компании, к которым относится контакт (через «Контакты клиента»): нужны и для поиска
+      // сделок, и для названий компаний в подписях. Решение Алексея 23.09.2026.
+      const personCompanyIds = await loadPersonCompanies(personIds);
+      const clientCompanyIds = Array.from(new Set([...companyIds, ...personCompanyIds]));
+
+      const names = await loadNames({
+        personIds,
+        companyIds: clientCompanyIds,
+        deals,
+      });
+      const dealFacts = await loadDealFacts(deals, names);
+
+      // Компания-покупатель сделки-цели может быть вне круга клиента — догружаем её название,
+      // иначе в подписи останется просто «компания».
+      const factsCompanyIds = [
+        ...new Set(
+          [...dealFacts.values()]
+            .map((fact) => String(fact.companyId ?? ''))
+            .filter((id) => id !== '' && !names.has(id)),
+        ),
+      ];
+
+      if (factsCompanyIds.length > 0) {
+        const extraNames = await loadNames({
+          personIds: [],
+          companyIds: factsCompanyIds,
+          deals: [],
+        });
+
+        for (const [key, value] of extraNames) names.set(key, value);
+
+        for (const [key, fact] of dealFacts) {
+          if (fact.owner !== 'person' && fact.companyId) {
+            dealFacts.set(key, {
+              ...fact,
+              ownerName: names.get(fact.companyId) ?? '',
+            });
+          }
+        }
+      }
       const phone =
         clientRows
           .map((item) => String(item.handle ?? ''))
@@ -606,23 +800,23 @@ const CallPanel = () => {
             return { id: String(item.id ?? ''), label: 'цель' };
           }
 
-          const name = names.get(String(item[matched.field] ?? '')) || '';
+          const refId = String(item[matched.field] ?? '');
+          const name = names.get(refId) || '';
+          const isDeal =
+            matched.kind !== 'contact' && matched.kind !== 'company';
 
           return {
             id: String(item.id ?? ''),
             label: name
               ? `${TARGET_KIND_LABELS[matched.kind]}: ${name}`
               : TARGET_KIND_LABELS[matched.kind],
+            deal: isDeal ? dealFacts.get(`${matched.kind}:${refId}`) : undefined,
           };
         }),
       );
 
-      // Открытые сделки клиента: контакты + компании-участники + компании контакта
-      // (через «Контакты клиента»). Решение Алексея 23.09.2026.
-      const personCompanyIds = await loadPersonCompanies(personIds);
-      const clientCompanyIds = Array.from(new Set([...companyIds, ...personCompanyIds]));
-
-      setDeals(await loadActiveDeals(personIds, clientCompanyIds));
+      // Открытые сделки клиента: контакты + компании-участники + компании контакта.
+      setDeals(await loadActiveDeals(personIds, clientCompanyIds, names));
 
       const targetKeys = new Set<string>();
 
@@ -642,7 +836,7 @@ const CallPanel = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [recordId, api, list, loadNames, loadActiveDeals, loadPersonCompanies]);
+  }, [recordId, api, list, loadNames, loadActiveDeals, loadPersonCompanies, loadDealFacts]);
 
   useEffect(() => {
     void load();
@@ -1183,15 +1377,29 @@ const CallPanel = () => {
                 gap: '8px',
               }}
             >
-              <span
+              <div
                 style={{
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '1px',
+                  minWidth: 0,
                 }}
               >
-                {row.label}
-              </span>
+                <span
+                  style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {row.label}
+                </span>
+                {row.deal ? (
+                  <span style={{ opacity: 0.6, fontSize: '11.5px', whiteSpace: 'nowrap' }}>
+                    {dealSubtitle(row.deal)}
+                  </span>
+                ) : null}
+              </div>
               {unlinkButton('target', row)}
             </div>
           ))
@@ -1229,26 +1437,47 @@ const CallPanel = () => {
                   gap: '8px',
                 }}
               >
-                <button
-                  type="button"
-                  onClick={() => openDeal(deal)}
-                  title="Открыть сделку"
+                <div
                   style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'inherit',
-                    cursor: 'pointer',
-                    padding: 0,
-                    textAlign: 'left',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    textDecoration: 'underline',
-                    textDecorationStyle: 'dotted',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '1px',
+                    minWidth: 0,
                   }}
                 >
-                  {deal.label}: {deal.name || 'без названия'}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => openDeal(deal)}
+                    title="Открыть сделку"
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'inherit',
+                      cursor: 'pointer',
+                      padding: 0,
+                      textAlign: 'left',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      textDecoration: 'underline',
+                      textDecorationStyle: 'dotted',
+                    }}
+                  >
+                    {deal.label}: {deal.name || 'без названия'}
+                  </button>
+
+                  <span
+                    style={{
+                      opacity: 0.6,
+                      fontSize: '11.5px',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {dealSubtitle(deal)}
+                  </span>
+                </div>
 
                 {isTarget ? (
                   <span style={{ opacity: 0.7, fontSize: '12px', whiteSpace: 'nowrap' }}>

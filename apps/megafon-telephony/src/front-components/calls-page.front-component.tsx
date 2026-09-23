@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { SidePanelPages, openSidePanelPage, useUserId } from 'twenty-sdk/front-component';
 
@@ -58,23 +58,12 @@ type CallRow = {
   hasTarget: boolean;
   /** Вторая сторона — наш сотрудник (звонок внутри). */
   isInternal: boolean;
-  /** Событие календаря звонка — к нему привязываем клиента и цель. */
+  /** Событие календаря звонка — цель звонка смотрим по нему. */
   eventId: string;
-  /** Привязки клиента (участники-контакт/компания) — для отвязки. */
-  clientLinks: { id: string; label: string }[];
-  /** Цели события — для отвязки. */
-  targetLinks: { id: string; label: string }[];
 };
 
-/** Что сопоставляем из строки журнала: второго участника или цель звонка. */
-type LinkDialogKind = 'client' | 'target';
-
-/** Вид сущности для поиска: контакт, компания или сделка. */
+/** Вид сущности цели звонка: контакт, компания или сделка. */
 type LinkKind = 'contact' | 'company' | 'opportunity' | 'remont' | 'zapravka' | 'tender';
-
-type LinkDialogState = { call: CallRow; kind: LinkDialogKind };
-
-type SearchItem = { id: string; title: string; subtitle: string };
 
 /** Подписи видов цели (как в колонке «Цель»). */
 const TARGET_KIND_LABELS: Record<LinkKind, string> = {
@@ -84,19 +73,6 @@ const TARGET_KIND_LABELS: Record<LinkKind, string> = {
   remont: 'Ремонт',
   zapravka: 'Заправка',
   tender: 'Тендер',
-};
-
-/** Источники поиска для сопоставления: контакты, компании и сделки. */
-const SEARCH_SOURCES: Record<
-  LinkKind,
-  { path: string; key: string; select: string }
-> = {
-  contact: { path: '/rest/people', key: 'people', select: 'id,name,phones' },
-  company: { path: '/rest/companies', key: 'companies', select: 'id,name,telefony' },
-  opportunity: { path: '/rest/opportunities', key: 'opportunities', select: 'id,name' },
-  remont: { path: '/rest/remontOborudovaniyas', key: 'remontOborudovaniyas', select: 'id,name' },
-  zapravka: { path: '/rest/zapravkaKartridzheys', key: 'zapravkaKartridzheys', select: 'id,name' },
-  tender: { path: '/rest/tendery', key: 'tendery', select: 'id,name' },
 };
 
 type FilterKey = 'all' | 'contacts' | 'companies' | 'noClient' | 'noTarget' | 'internal';
@@ -927,25 +903,6 @@ const CallsPage = () => {
             hasTarget: targetParts.length > 0,
             isInternal: personIds.length === 0 && participantCompanyIds.length === 0 && isOwnNumber,
             eventId,
-            clientLinks: (eventId ? clientRowsByEvent[eventId] ?? [] : []).map((row) => ({
-              id: row.id,
-              label: row.personId
-                ? personNames[row.personId] ?? 'контакт'
-                : companyNames[row.companyId ?? ''] ?? 'компания',
-            })),
-            targetLinks: (eventId ? targetRowsByEvent[eventId] ?? [] : []).map((row) => {
-              const name =
-                row.kind === 'contact'
-                  ? personNames[row.refId] ?? ''
-                  : row.kind === 'company'
-                    ? companyNames[row.refId] ?? ''
-                    : dealNames[row.refId] ?? '';
-
-              return {
-                id: row.id,
-                label: name ? `${TARGET_KIND_LABELS[row.kind]}: ${name}` : TARGET_KIND_LABELS[row.kind],
-              };
-            }),
           };
         });
 
@@ -992,17 +949,6 @@ const CallsPage = () => {
    * панели хост не даёт (общего состояния между компонентами нет), поэтому
    * подсветка снимается при выборе другого сотрудника или перезагрузке страницы.
    */
-  /** Клик по строке: кнопки сопоставления помечают клик, чтобы он «не считался». */
-  const openRow = (recordId: string) => {
-    if (suppressRowClickRef.current) {
-      suppressRowClickRef.current = false;
-
-      return;
-    }
-
-    openCall(recordId);
-  };
-
   /**
    * Разведка (этап 1): id компонента нашей боковой панели.
    *
@@ -1085,204 +1031,6 @@ const CallsPage = () => {
     })();
   };
 
-  // ── ручное сопоставление: клиент (участник) и цель (цель события) ──────────
-  const [dialog, setDialog] = useState<LinkDialogState | null>(null);
-  const [searchKind, setSearchKind] = useState<LinkKind>('contact');
-  const [searchText, setSearchText] = useState('');
-  const [searchItems, setSearchItems] = useState<SearchItem[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [linkBusy, setLinkBusy] = useState(false);
-  const [linkError, setLinkError] = useState('');
-  /** Запись, которую пользователь уже «нажал отвязать» — ждём подтверждения. */
-  const [pendingUnlink, setPendingUnlink] = useState<string | null>(null);
-  /** Клик пришёл по кнопке сопоставления — карточку звонка не открываем. */
-  const suppressRowClickRef = useRef(false);
-
-  const markRowClickSuppressed = () => {
-    suppressRowClickRef.current = true;
-
-    try {
-      setTimeout(() => {
-        suppressRowClickRef.current = false;
-      }, 300);
-    } catch {
-      // без таймера флаг снимется при следующем клике по строке
-    }
-  };
-
-  const openLinkDialog = (call: CallRow, kind: LinkDialogKind) => {
-    if (!call.eventId) {
-      setError('У звонка нет события календаря — сопоставление недоступно');
-
-      return;
-    }
-
-    setDialog({ call, kind });
-    setSearchKind(kind === 'client' ? 'contact' : 'opportunity');
-    setSearchText('');
-    setSearchItems([]);
-    setLinkError('');
-  };
-
-  const closeLinkDialog = () => {
-    setDialog(null);
-    setSearchItems([]);
-    setLinkError('');
-    setIsSearching(false);
-    setPendingUnlink(null);
-  };
-
-  /** Поиск клиента или цели: контакты, компании и сделки. */
-  const runSearch = async () => {
-    if (!dialog) return;
-
-    const text = searchText.trim();
-
-    if (text.length < 2) {
-      setLinkError('Введите хотя бы два символа');
-
-      return;
-    }
-
-    setIsSearching(true);
-    setLinkError('');
-
-    try {
-      const digits = text.replace(/\D/g, '');
-      const source = SEARCH_SOURCES[searchKind];
-      const conditions: string[] = [];
-
-      if (searchKind === 'contact') {
-        conditions.push(`name.firstName[ilike]:%${text}%`);
-        conditions.push(`name.lastName[ilike]:%${text}%`);
-
-        if (digits.length >= 4) {
-          conditions.push(`phones.primaryPhoneNumber[ilike]:%${digits}%`);
-          // дополнительные телефоны: для RAW_JSON доступен только `like`
-          conditions.push(`phones.additionalPhones[like]:%${digits}%`);
-        }
-      } else if (searchKind === 'company') {
-        conditions.push(`name[ilike]:%${text}%`);
-
-        if (digits.length >= 4) {
-          conditions.push(`telefony.primaryPhoneNumber[ilike]:%${digits}%`);
-          conditions.push(`telefony.additionalPhones[like]:%${digits}%`);
-        }
-      } else {
-        conditions.push(`name[ilike]:%${text}%`);
-      }
-
-      const filter = conditions.length > 1 ? `or(${conditions.join(',')})` : conditions[0];
-      const params = new URLSearchParams({ filter, limit: '100', select: source.select });
-      const response = await api(`${source.path}?${params.toString()}`);
-      const json = (await response.json()) as ApiList<{
-        id: string;
-        name?: { firstName?: string; lastName?: string } | string | null;
-        phones?: {
-          primaryPhoneNumber?: string | null;
-          primaryPhoneCallingCode?: string | null;
-        } | null;
-        telefony?: { primaryPhoneNumber?: string | null } | null;
-      }>;
-      const rows = json.data?.[source.key] ?? [];
-
-      setSearchItems(
-        rows.map((row) => ({
-          id: row.id,
-          title: typeof row.name === 'string' ? row.name : fullName(row.name) || 'без названия',
-          subtitle:
-            searchKind === 'contact'
-              ? formatPhone(row.phones)
-              : searchKind === 'company'
-                ? formatPhone(row.telefony)
-                : '',
-        })),
-      );
-    } catch (searchError) {
-      setLinkError(describeError(searchError));
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  /** Привязка выбранного клиента или цели. */
-  const runLink = async (item: SearchItem) => {
-    if (!dialog) return;
-
-    setLinkBusy(true);
-    setLinkError('');
-
-    try {
-      const body: Record<string, unknown> = {
-        action: dialog.kind === 'client' ? 'linkClient' : 'linkTarget',
-        eventId: dialog.call.eventId,
-        callRecordingId: dialog.call.id,
-        title: dialog.call.title ?? '',
-        happensAt: dialog.call.startedAt ?? '',
-      };
-
-      if (dialog.kind === 'client') {
-        if (searchKind === 'company') {
-          body.companyId = item.id;
-          body.displayName = item.title;
-        } else {
-          body.personId = item.id;
-          body.displayName = item.title;
-          body.handle = dialog.call.personPhone || '';
-        }
-      } else {
-        body.kind = searchKind;
-        body.targetId = item.id;
-      }
-
-      const response = await api(`${functionsBase}/call-journal-link`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const json = (await response.json()) as { ok?: boolean; error?: string };
-
-      if (!json.ok) throw new Error(json.error || 'не удалось привязать');
-
-      closeLinkDialog();
-
-      if (selectedId) await loadCalls(selectedId, null);
-    } catch (linkErr) {
-      setLinkError(describeError(linkErr));
-    } finally {
-      setLinkBusy(false);
-    }
-  };
-
-  /** Снятие привязки: участник-клиент или цель события. */
-  const runUnlink = async (kind: LinkDialogKind, id: string) => {
-    setLinkBusy(true);
-    setLinkError('');
-
-    try {
-      const response = await api(`${functionsBase}/call-journal-link`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(
-          kind === 'client'
-            ? { action: 'unlinkClient', participantId: id }
-            : { action: 'unlinkTarget', targetId: id },
-        ),
-      });
-      const json = (await response.json()) as { ok?: boolean; error?: string };
-
-      if (!json.ok) throw new Error(json.error || 'не удалось отвязать');
-
-      closeLinkDialog();
-
-      if (selectedId) await loadCalls(selectedId, null);
-    } catch (linkErr) {
-      setLinkError(describeError(linkErr));
-    } finally {
-      setLinkBusy(false);
-    }
-  };
-
   // Фильтры контроля. Считаем по загруженным звонкам — список догружается кнопкой ниже.
   // «Нет клиента» / «Нет цели» смотрим по своим колонкам: внутренние звонки сюда тоже попадают
   // (разговор с коллегой тоже бывает про сделку — её и надо проставить целью).
@@ -1338,45 +1086,6 @@ const CallsPage = () => {
     boxSizing: 'border-box',
   } as const;
 
-  /** Кнопка сопоставления в ячейке: «＋ клиент» / «✎» — не открывает карточку. */
-  const linkButtonStyle = {
-    flex: '0 0 auto',
-    padding: '1px 7px',
-    borderRadius: '999px',
-    border: '1px dashed rgba(128, 128, 128, 0.5)',
-    background: 'transparent',
-    color: 'inherit',
-    cursor: 'pointer',
-    fontSize: '11.5px',
-    lineHeight: '17px',
-    whiteSpace: 'nowrap',
-    opacity: 0.9,
-  } as const;
-
-  /** Уже привязанное значение: кликабельно, без рамки и карандаша. */
-  const linkedValueStyle = {
-    flex: '0 1 auto',
-    minWidth: 0,
-    padding: 0,
-    border: 'none',
-    background: 'transparent',
-    color: 'inherit',
-    cursor: 'pointer',
-    font: 'inherit',
-    textAlign: 'left',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    textDecoration: 'underline dotted',
-    textUnderlineOffset: '3px',
-  } as const;
-
-  const dialogLinks = dialog
-    ? dialog.kind === 'client'
-      ? dialog.call.clientLinks
-      : dialog.call.targetLinks
-    : [];
-
   return (
     <div
       style={{
@@ -1421,8 +1130,8 @@ const CallsPage = () => {
       </div>
 
       <div style={{ opacity: 0.6, fontSize: '12px' }}>
-        Нажмите на звонок — карточка откроется в панели справа. Показаны все звонки сотрудника,
-        счётчики фильтров — по ним же.
+        Нажмите на звонок — справа откроется панель звонка: клиент и цель, запись с расшифровкой,
+        открытые сделки. Показаны все звонки сотрудника, счётчики фильтров — по ним же.
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
@@ -1486,13 +1195,12 @@ const CallsPage = () => {
       ) : null}
 
       {visibleCalls.map((call) => (
-        <Fragment key={call.id}>
         <div
           key={call.id}
-          onClick={() => openRow(call.id)}
+          onClick={() => openCall(call.id)}
           onMouseEnter={() => setHoveredId(call.id)}
           onMouseLeave={() => setHoveredId(null)}
-          title="Открыть карточку звонка"
+          title="Открыть панель звонка"
           style={{
             ...gridStyle,
             cursor: 'pointer',
@@ -1514,265 +1222,22 @@ const CallsPage = () => {
           <span>{formatDateTime(call.startedAt)}</span>
           <span>{directionLabel(call.direction)}</span>
           <span>{call.personPhone || '—'}</span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
-            {call.clientText ? (
-              <button
-                type="button"
-                title="Изменить клиента"
-                onClick={(event) => {
-                  markRowClickSuppressed();
-                  event.stopPropagation();
-                  openLinkDialog(call, 'client');
-                }}
-                style={linkedValueStyle}
-              >
-                {call.clientText}
-              </button>
-            ) : (
-              <button
-                type="button"
-                title="Сопоставить клиента"
-                onClick={(event) => {
-                  markRowClickSuppressed();
-                  event.stopPropagation();
-                  openLinkDialog(call, 'client');
-                }}
-                style={linkButtonStyle}
-              >
-                ＋ клиент
-              </button>
-            )}
+          <span
+            title={call.clientText || undefined}
+            style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          >
+            {call.clientText || '—'}
           </span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
-            {call.targetText ? (
-              <button
-                type="button"
-                title="Изменить цель"
-                onClick={(event) => {
-                  markRowClickSuppressed();
-                  event.stopPropagation();
-                  openLinkDialog(call, 'target');
-                }}
-                style={linkedValueStyle}
-              >
-                {call.targetText}
-              </button>
-            ) : (
-              <button
-                type="button"
-                title="Сопоставить цель"
-                onClick={(event) => {
-                  markRowClickSuppressed();
-                  event.stopPropagation();
-                  openLinkDialog(call, 'target');
-                }}
-                style={linkButtonStyle}
-              >
-                ＋ цель
-              </button>
-            )}
+          <span
+            title={call.targetText || undefined}
+            style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          >
+            {call.targetText || '—'}
           </span>
           <span>{formatDuration(call.startedAt, call.endedAt)}</span>
           <span>{call.result ? RESULT_LABELS[call.result] ?? call.result : '—'}</span>
           <span>{call.audioUrl ? '🎧' : '—'}</span>
         </div>
-        {dialog && dialog.call.id === call.id ? (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '10px',
-              fontSize: '13px',
-              margin: '4px 0 8px 10px',
-              padding: '12px 14px',
-              borderRadius: '8px',
-              border: '1px solid rgba(128, 128, 128, 0.45)',
-              background: 'rgba(128, 128, 128, 0.08)',
-            }}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
-              <span style={{ fontWeight: 600, fontSize: '14px' }}>
-                {dialog.kind === 'client' ? 'Сопоставить клиента' : 'Сопоставить цель'}
-              </span>
-              <button type="button" onClick={closeLinkDialog} style={linkButtonStyle}>
-                закрыть
-              </button>
-            </div>
-
-            <div style={{ opacity: 0.65, fontSize: '12px' }}>
-              {dialog.kind === 'client'
-                ? 'Клиент — второй участник звонка: контакт или компания.'
-                : 'Цель — к чему отнесён звонок: контакт, компания или сделка.'}
-              {' '}
-              {dialog.call.title ?? ''}
-            </div>
-
-            {/* Вид сущности: у клиента — контакт/компания, у цели — плюс сделки */}
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-              {(dialog.kind === 'client'
-                ? (['contact', 'company'] as LinkKind[])
-                : (Object.keys(TARGET_KIND_LABELS) as LinkKind[])
-              ).map((kind) => {
-                const isActive = searchKind === kind;
-
-                return (
-                  <button
-                    key={kind}
-                    type="button"
-                    onClick={() => {
-                      setSearchKind(kind);
-                      setSearchItems([]);
-                    }}
-                    style={{
-                      padding: '3px 12px',
-                      borderRadius: '999px',
-                      border: `1px solid ${
-                        isActive ? 'rgba(128, 128, 128, 0.75)' : 'rgba(128, 128, 128, 0.35)'
-                      }`,
-                      background: isActive ? 'rgba(128, 128, 128, 0.22)' : 'transparent',
-                      color: 'inherit',
-                      cursor: 'pointer',
-                      fontSize: '12.5px',
-                      fontWeight: isActive ? 600 : 400,
-                    }}
-                  >
-                    {TARGET_KIND_LABELS[kind]}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <input
-                value={searchText}
-                onChange={(event) => setSearchText(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    void runSearch();
-                  }
-                }}
-                placeholder={
-                  dialog.kind === 'client'
-                    ? 'Имя контакта, название компании или номер телефона'
-                    : 'Название: заказ, ремонт, заправка, тендер'
-                }
-                autoFocus
-                style={{
-                  flex: 1,
-                  padding: '6px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid rgba(128, 128, 128, 0.45)',
-                  background: 'transparent',
-                  color: 'inherit',
-                  fontSize: '13px',
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => void runSearch()}
-                disabled={isSearching}
-                style={{
-                  padding: '6px 14px',
-                  borderRadius: '6px',
-                  border: '1px solid rgba(128, 128, 128, 0.45)',
-                  background: 'transparent',
-                  color: 'inherit',
-                  cursor: isSearching ? 'default' : 'pointer',
-                  fontSize: '13px',
-                }}
-              >
-                {isSearching ? 'Ищем…' : 'Найти'}
-              </button>
-            </div>
-
-            {dialogLinks.length > 0 ? (
-              <div style={{ borderTop: '1px solid rgba(128, 128, 128, 0.22)', paddingTop: '8px' }}>
-                <div style={{ opacity: 0.7, fontSize: '12px', marginBottom: '4px' }}>Уже привязано</div>
-                {dialogLinks.map((link) => (
-                  <div
-                    key={link.id}
-                    style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '3px 0' }}
-                  >
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {link.label}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={linkBusy}
-                      title="Связь удаляется безвозвратно"
-                      onClick={() => {
-                        if (pendingUnlink === link.id) {
-                          void runUnlink(dialog.kind, link.id);
-                        } else {
-                          setPendingUnlink(link.id);
-                        }
-                      }}
-                      style={{
-                        padding: '2px 10px',
-                        borderRadius: '6px',
-                        border: `1px solid ${
-                          pendingUnlink === link.id
-                            ? 'rgba(220, 90, 90, 0.75)'
-                            : 'rgba(128, 128, 128, 0.45)'
-                        }`,
-                        background: 'transparent',
-                        color: pendingUnlink === link.id ? '#e0736f' : 'inherit',
-                        cursor: linkBusy ? 'default' : 'pointer',
-                        fontSize: '12px',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {pendingUnlink === link.id ? 'Точно? Да' : 'Отвязать'}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '4px',
-                maxHeight: '280px',
-                overflowY: 'auto',
-              }}
-            >
-              {searchItems.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  disabled={linkBusy}
-                  onClick={() => void runLink(item)}
-                  style={{
-                    textAlign: 'left',
-                    padding: '7px 10px',
-                    borderRadius: '6px',
-                    border: '1px solid rgba(128, 128, 128, 0.3)',
-                    background: 'transparent',
-                    color: 'inherit',
-                    cursor: linkBusy ? 'default' : 'pointer',
-                    fontSize: '13px',
-                  }}
-                >
-                  {item.title}
-                  {item.subtitle ? (
-                    <span style={{ opacity: 0.65, marginLeft: '8px' }}>{item.subtitle}</span>
-                  ) : null}
-                </button>
-              ))}
-
-              {!isSearching && searchItems.length === 0 && searchText.trim() ? (
-                <div style={{ opacity: 0.6, fontSize: '12.5px' }}>Ничего не найдено</div>
-              ) : null}
-            </div>
-
-            {linkError ? <div style={{ opacity: 0.95, fontSize: '12.5px' }}>✗ {linkError}</div> : null}
-          </div>
-        ) : null}
-        </Fragment>
       ))}
 
       {nextCursor ? (
