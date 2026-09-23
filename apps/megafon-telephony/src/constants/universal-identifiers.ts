@@ -60,6 +60,11 @@ export const COMPANY_OBJECT_UNIVERSAL_IDENTIFIER =
   '20202020-b374-4779-a561-80086cb2e17f';
 export const CALENDAR_EVENT_OBJECT_UNIVERSAL_IDENTIFIER =
   '20202020-8f1d-4eef-9f85-0d1965e27221';
+/** Нужны ручному сопоставлению: запись в ленте контакта + поиск сделки «Заказ». */
+export const PERSON_OBJECT_UNIVERSAL_IDENTIFIER =
+  '20202020-e674-48e5-a542-72570eee7213';
+export const OPPORTUNITY_OBJECT_UNIVERSAL_IDENTIFIER =
+  '20202020-9549-49dd-b2b2-883999db8938';
 
 /** Наши объекты-сделки: пробуем связать событие с ними морф-связью (обход: Opportunity недоступен). */
 export const REMONT_OBORUDOVANIYA_OBJECT_UNIVERSAL_IDENTIFIER =
@@ -116,3 +121,10 @@ export const CALL_JOURNAL_ACCESS_GET_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
   '9ff0d80a-9f85-4e17-b27b-1582751ba3f9';
 export const CALL_JOURNAL_ACCESS_SAVE_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
   'eb6267d7-3ce2-41ca-9670-f4417f36e835';
+
+/**
+ * Ручное сопоставление звонка из журнала: клиент (участник события) и цель
+ * (цель события). Оба действия — один служебный маршрут.
+ */
+export const CALL_JOURNAL_LINK_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'b5dae13d-0a0e-4a03-9d09-2a56d230f15e';
