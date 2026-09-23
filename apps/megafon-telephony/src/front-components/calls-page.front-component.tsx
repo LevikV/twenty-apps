@@ -225,6 +225,8 @@ const CallsPage = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingCalls, setIsLoadingCalls] = useState(false);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  /** Чья панель открыта сейчас — строка подсвечивается (метка от панели звонка). */
+  const [activeCallId, setActiveCallId] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>('all');
   const [error, setError] = useState<string>('');
 
@@ -234,14 +236,27 @@ const CallsPage = () => {
   const token = env.TWENTY_APP_ACCESS_TOKEN ?? '';
 
   const api = useCallback(
-    (path: string, init?: RequestInit) =>
-      fetch(`${apiBase}${path}`, {
+    (path: string, init?: RequestInit) => {
+      const method = (init?.method ?? 'GET').toUpperCase();
+      // path может быть как относительным (`/rest/...`), так и полным
+      // (`<functionsBase>/название-функции`): подставлять адрес API вторым разом нельзя.
+      const target = /^https?:\/\//i.test(path) ? path : `${apiBase}${path}`;
+      // Мост песочницы не передаёт `cache`, поэтому кэш браузера обходим
+      // уникальным параметром: на 304 мост отдаёт ответ с пустым телом.
+      const url =
+        method === 'GET'
+          ? `${target}${target.includes('?') ? '&' : '?'}_ts=${Date.now()}`
+          : target;
+
+      return fetch(url, {
         ...init,
+        cache: 'no-store',
         headers: {
           ...((init?.headers as Record<string, string>) ?? {}),
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-      }),
+      });
+    },
     [apiBase, token],
   );
 
@@ -260,13 +275,17 @@ const CallsPage = () => {
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
       const [meResponse, membersResponse, rulesResponse] = await Promise.all([
         fetch(
-          `${apiBase}/rest/workspaceMembers?filter=${encodeURIComponent(`userId[eq]:${userId}`)}&limit=1&select=id,name,userEmail`,
-          { headers },
+          `${apiBase}/rest/workspaceMembers?filter=${encodeURIComponent(`userId[eq]:${userId}`)}&limit=1&select=id,name,userEmail&_ts=${Date.now()}`,
+          { headers, cache: 'no-store' },
         ),
-        fetch(`${apiBase}/rest/workspaceMembers?limit=60&select=id,name,userEmail`, {
+        fetch(`${apiBase}/rest/workspaceMembers?limit=60&select=id,name,userEmail&_ts=${Date.now()}`, {
           headers,
+          cache: 'no-store',
         }),
-        fetch(`${functionsBase}${ACCESS_PATH}`, { headers }),
+        fetch(`${functionsBase}${ACCESS_PATH}?_ts=${Date.now()}`, {
+          headers,
+          cache: 'no-store',
+        }),
       ]);
 
       const meJson = (await meResponse.json()) as ApiList<{
@@ -963,10 +982,16 @@ const CallsPage = () => {
 
   useEffect(() => {
     if (selectedId) {
+      setActiveCallId(null);
       loadCalls(selectedId, null);
     }
   }, [selectedId, loadCalls]);
 
+  /**
+   * Подсветка строки, чья панель открыта: ставим при клике. Узнать о закрытии
+   * панели хост не даёт (общего состояния между компонентами нет), поэтому
+   * подсветка снимается при выборе другого сотрудника или перезагрузке страницы.
+   */
   /** Клик по строке: кнопки сопоставления помечают клик, чтобы он «не считался». */
   const openRow = (recordId: string) => {
     if (suppressRowClickRef.current) {
@@ -1027,6 +1052,8 @@ const CallsPage = () => {
   }, [api]);
 
   const openCall = (recordId: string) => {
+    setActiveCallId(recordId);
+
     void (async () => {
       try {
         const panelComponentId = await resolvePanelComponentId();
@@ -1472,7 +1499,16 @@ const CallsPage = () => {
             padding: '7px 10px',
             borderRadius: '4px',
             borderBottom: '1px solid rgba(128, 128, 128, 0.12)',
-            background: hoveredId === call.id ? 'rgba(128, 128, 128, 0.14)' : 'transparent',
+            background:
+              activeCallId === call.id
+                ? 'rgba(128, 128, 128, 0.28)'
+                : hoveredId === call.id
+                  ? 'rgba(128, 128, 128, 0.14)'
+                  : 'transparent',
+            boxShadow:
+              activeCallId === call.id
+                ? 'inset 3px 0 0 rgba(128, 128, 128, 0.9)'
+                : 'none',
           }}
         >
           <span>{formatDateTime(call.startedAt)}</span>
