@@ -70,12 +70,18 @@ const CallsAccessSettings = () => {
       const token = TWENTY_APP_ACCESS_TOKEN ?? '';
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
+      // Кэш браузера обходим уникальным параметром `_ts`: мост песочницы не передаёт
+      // `cache: 'no-store'`, а на 304 отдаёт ответ с пустым телом (тот же дефект,
+      // что чинили в журнале и боковой панели).
       const [membersResponse, rulesResponse] = await Promise.all([
         fetch(
-          `${apiBase}/rest/workspaceMembers?limit=60&select=id,name,userEmail`,
-          { headers },
+          `${apiBase}/rest/workspaceMembers?limit=60&select=id,name,userEmail&_ts=${Date.now()}`,
+          { headers, cache: 'no-store' },
         ),
-        fetch(`${functionsBase}${ACCESS_PATH}`, { headers }),
+        fetch(`${functionsBase}${ACCESS_PATH}?_ts=${Date.now()}`, {
+          headers,
+          cache: 'no-store',
+        }),
       ]);
 
       const membersJson = (await membersResponse.json()) as {
