@@ -38,7 +38,7 @@ export const writeWebhookLog = async (params: {
   const syroeTelo = {
     personFound: Boolean(lookup.personId),
     companyFound: Boolean(lookup.companyId),
-    employeeFound: Boolean(employee.employeeId),
+    employeeFound: Boolean(employee.employeeId || employee.employeeName),
     employeeSource: employee.source,
     klient: parsed.clientPhone,
     companyId: lookup.companyId,

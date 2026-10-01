@@ -78,7 +78,9 @@ const applyInternalFallback = async (result: ClientLookup, phone: string): Promi
 
   const employee = await lookupEmployeeByOurNumber(phone);
 
-  if (employee.employeeId) {
+  // У сотрудника может не быть пользователя CRM — тогда участник подписывается
+  // только именем (`internalEmployeeId` остаётся пустым).
+  if (employee.employeeName) {
     result.internalEmployeeId = employee.employeeId;
     result.internalEmployeeName = employee.employeeName;
   }

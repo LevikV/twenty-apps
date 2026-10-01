@@ -58,7 +58,23 @@ type Row = {
   personId?: string | null;
   companyId?: string | null;
   workspaceMemberId?: string | null;
+  displayName?: string | null;
 };
+
+/** Участник-сотрудник: наш, а не клиент (у того есть personId) и не компания (companyId). */
+const isEmployeeParticipant = (row: Row): boolean => !row.personId && !row.companyId;
+
+/** Есть ли уже такой участник-сотрудник: по id пользователя CRM, иначе — по имени. */
+const hasEmployeeParticipant = (
+  participants: Row[],
+  memberId: string,
+  name: string,
+): boolean =>
+  memberId
+    ? participants.some((row) => row.workspaceMemberId === memberId)
+    : participants.some(
+        (row) => isEmployeeParticipant(row) && !row.workspaceMemberId && row.displayName === name,
+      );
 
 /**
  * Запись в ленте компании — штатным хелпером SDK: тип активности указывается
@@ -134,18 +150,26 @@ const addParticipant = async (calendarEventId: string, body: Record<string, unkn
  * того, кто ответил, — остальных (кому звонило на групповом номере) убираем.
  * Если никто не ответил, список не трогаем: пропущенный звонок должен быть виден
  * у каждого, кому звонило (решение Алексея 22.09.2026).
+ *
+ * У сотрудника может не быть пользователя CRM (объект «Сотрудник» шире воркспейса) —
+ * такие участники хранятся только с именем, поэтому сверяем и по `displayName`.
  */
 const removeOtherEmployees = async (
   calendarEventId: string,
   keepMemberIds: string[],
+  keepNames: string[],
 ): Promise<number> => {
   const rows = await listOf('/rest/calendarEventParticipants', calendarEventId);
   let removed = 0;
 
   for (const row of rows) {
-    const memberId = String(row.workspaceMemberId ?? '');
+    if (!row.id || !isEmployeeParticipant(row)) continue;
 
-    if (row.id && memberId && !keepMemberIds.includes(memberId)) {
+    const memberId = String(row.workspaceMemberId ?? '');
+    const name = String(row.displayName ?? '');
+    const keep = memberId ? keepMemberIds.includes(memberId) : keepNames.includes(name);
+
+    if (!keep) {
       await client.delete(`/rest/calendarEventParticipants/${row.id}`);
       removed += 1;
     }
@@ -270,13 +294,12 @@ export const ensureCallLinks = async (params: {
   // наш сотрудник: на промежуточных хуках — тот, кому звонило (на групповом
   // номере так собираются все, кому звонило); на итоговом — остаётся один
   // ответивший, лишних убираем ниже.
-  if (
-    employee.employeeId &&
-    !participants.some((row) => row.workspaceMemberId === employee.employeeId)
-  ) {
+  // У сотрудника может не быть пользователя CRM: тогда участник подписывается
+  // только именем, без `workspaceMemberId`.
+  if (employee.employeeName && !hasEmployeeParticipant(participants, employee.employeeId, employee.employeeName)) {
     await addParticipant(calendarEventId, {
-      workspaceMemberId: employee.employeeId,
-      displayName: employee.employeeName || '',
+      ...(employee.employeeId ? { workspaceMemberId: employee.employeeId } : {}),
+      displayName: employee.employeeName,
       isOrganizer: true,
       responseStatus: 'ACCEPTED',
     });
@@ -285,11 +308,15 @@ export const ensureCallLinks = async (params: {
 
   // внутренний звонок: вторая сторона — наш сотрудник, а не клиент
   if (
-    lookup.internalEmployeeId &&
-    !participants.some((row) => row.workspaceMemberId === lookup.internalEmployeeId)
+    (lookup.internalEmployeeId || lookup.internalEmployeeName) &&
+    !hasEmployeeParticipant(
+      participants,
+      lookup.internalEmployeeId,
+      lookup.internalEmployeeName,
+    )
   ) {
     await addParticipant(calendarEventId, {
-      workspaceMemberId: lookup.internalEmployeeId,
+      ...(lookup.internalEmployeeId ? { workspaceMemberId: lookup.internalEmployeeId } : {}),
       displayName: lookup.internalEmployeeName || '',
       handle: clientPhone || '',
       responseStatus: 'ACCEPTED',
@@ -300,10 +327,11 @@ export const ensureCallLinks = async (params: {
   // итоговый хук и ответивший определился: оставляем только его
   // (внутреннего собеседника не трогаем). Если никто не ответил — оставляем
   // всех, кому звонило.
-  if (finalizeEmployees && employee.employeeId) {
+  if (finalizeEmployees && (employee.employeeId || employee.employeeName)) {
     result.removedEmployees = await removeOtherEmployees(
       calendarEventId,
       [employee.employeeId, lookup.internalEmployeeId].filter(Boolean),
+      [employee.employeeName, lookup.internalEmployeeName].filter(Boolean),
     );
   }
 

@@ -510,17 +510,40 @@ const CallsPage = () => {
           return (json.data ?? {}) as T;
         };
 
-        // Наши номера: рабочие (из должностей) и личные (из карточек сотрудников).
+        // Наши номера: рабочие (из должностей), из карточек «Сотрудник» (новое
+        // место телефона) и старые личные телефоны пользователей CRM.
         // Внутренний звонок — только когда вторая сторона звонила с одного из них.
         if (!ownNumbersRef.current) {
           const ownNumbers = new Set<string>();
+          const addNumbers = (
+            value?: {
+              primaryPhoneNumber?: string | null;
+              additionalPhones?: ({ number?: string | null } | string)[] | null;
+            } | null,
+          ) => {
+            const primary = normalizePhone(value?.primaryPhoneNumber ?? '');
+
+            if (primary) ownNumbers.add(primary);
+
+            (value?.additionalPhones ?? []).forEach((extra) => {
+              const raw = typeof extra === 'string' ? extra : extra?.number;
+              const number = normalizePhone(raw ?? '');
+
+              if (number) ownNumbers.add(number);
+            });
+          };
 
           try {
-            const [positions, staff] = await Promise.all([
+            const [positions, staff, members] = await Promise.all([
               fetchAll<{ workPhone?: { primaryPhoneNumber?: string | null } | null }>(
                 '/rest/positions',
                 { select: 'id,workPhone' },
                 'positions',
+              ),
+              fetchAll<{ telefon?: { primaryPhoneNumber?: string | null } | null }>(
+                '/rest/sotrudniki',
+                { select: 'id,telefon' },
+                'sotrudniki',
               ),
               fetchAll<{ telefon?: { primaryPhoneNumber?: string | null } | null }>(
                 '/rest/workspaceMembers',
@@ -529,21 +552,9 @@ const CallsPage = () => {
               ),
             ]);
 
-            positions.forEach((position) => {
-              const number = normalizePhone(position.workPhone?.primaryPhoneNumber ?? '');
-
-              if (number) {
-                ownNumbers.add(number);
-              }
-            });
-
-            staff.forEach((member) => {
-              const number = normalizePhone(member.telefon?.primaryPhoneNumber ?? '');
-
-              if (number) {
-                ownNumbers.add(number);
-              }
-            });
+            positions.forEach((position) => addNumbers(position.workPhone));
+            staff.forEach((employee) => addNumbers(employee.telefon));
+            members.forEach((member) => addNumbers(member.telefon));
           } catch {
             // без списка номеров внутренние просто не определим — журнал не ломаем
           }
