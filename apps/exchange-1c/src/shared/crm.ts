@@ -175,6 +175,7 @@ export const pluralOf = (objectNameSingular: string): string => {
     companyAddress: 'companyAddresses',
     kontaktKlienta: 'kontaktyKlientov',
     reestrSopostavleniy: 'reestrySopostavleniy',
+    remontOborudovaniya: 'remontOborudovaniyas',
     queueTask: 'queueTasks',
   };
 

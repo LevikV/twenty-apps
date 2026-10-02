@@ -40,6 +40,13 @@ import {
   upsertReestrRow,
   type PersonRecord,
 } from 'src/shared/people';
+import {
+  buildServiceDocFields,
+  CARTRIDGE_TYPE,
+  DEVICE_TYPE,
+  type ServiceDocRefs,
+} from 'src/shared/service-docs';
+import type { ServiceDocPayload } from 'src/shared/payload-service-doc';
 
 export type ProcessOutcome = {
   status: 'done' | 'error' | 'pending';
@@ -520,6 +527,187 @@ const handleContractTask = async (task: QueueTask): Promise<ProcessOutcome> => {
   return processContract(payload);
 };
 
+const REMONT_PLURAL = 'remontOborudovaniyas';
+const REMONT_SINGULAR = 'remontOborudovaniya';
+
+const findRemontByGuid = async (guid: string) =>
+  (await findFirst(REMONT_PLURAL, REMONT_SINGULAR, `guid[eq]:${guid}`)) as
+    | (Record<string, unknown> & { id: string })
+    | undefined;
+
+/** «Сотрудники» 1С по guid. */
+const findSotrudnikByGuid = async (guid: string) =>
+  (await findFirst('sotrudniki', 'sotrudnik', `guid[eq]:${guid}`)) as
+    | (Record<string, unknown> & { id: string })
+    | undefined;
+
+const findDogovorByGuid = async (guid: string) =>
+  (await findFirst('dogovora', 'dogovor', `guid[eq]:${guid}`)) as
+    | (Record<string, unknown> & { id: string })
+    | undefined;
+
+/** Покупатель ДС: компания по objectGuid, иначе человек (реестр, затем objectGuid). */
+const findBuyer = async (
+  guid: string,
+): Promise<{ companyId?: string; personId?: string } | null> => {
+  const company = await findCompanyByGuid(guid);
+
+  if (company?.id) {
+    return { companyId: company.id };
+  }
+
+  const byReestr = await findPersonByReestr(guid);
+
+  if (byReestr?.personId) {
+    return { personId: byReestr.personId };
+  }
+
+  const person = await findPersonByObjectGuid(guid);
+
+  return person?.id ? { personId: person.id } : null;
+};
+
+/**
+ * Документ сервиса (`objectType = "УниверсальныйСервис"`) → «Ремонт оборудования».
+ * Картриджи на этом этапе не раскладываются — задача закрывается с пояснением.
+ * Удаление: карточка не удаляется, а помечается «Активен» = false.
+ */
+const processServiceDoc = async (task: QueueTask): Promise<ProcessOutcome> => {
+  const payload = task.payload as ServiceDocPayload;
+
+  if (!payload?.guid) {
+    throw new Error('в задаче нет payload.guid');
+  }
+
+  const existing = await findRemontByGuid(payload.guid);
+  const deleted = payload.deleted === true || task.action === 'DELETE';
+
+  if (deleted) {
+    if (!existing?.id) {
+      return {
+        status: 'done',
+        note: 'запись на удаление не найдена в CRM — удалять нечего',
+      };
+    }
+
+    await updateOne(REMONT_PLURAL, REMONT_SINGULAR, String(existing.id), {
+      aktiven: false,
+    });
+
+    return { status: 'done', note: 'ДС помечена неактивной («Активен» = нет)' };
+  }
+
+  const equipment = String(payload.equipment_type ?? '').trim();
+
+  if (equipment === CARTRIDGE_TYPE) {
+    return {
+      status: 'done',
+      note: 'тип «Картриджи» — не обрабатывается на этом этапе',
+    };
+  }
+
+  if (equipment !== DEVICE_TYPE) {
+    throw new Error(`неизвестный equipment_type: «${equipment}»`);
+  }
+
+  const refs: ServiceDocRefs = {};
+  const missing: string[] = [];
+  // пометки, которые не мешают закрыть задачу (видимый пропуск, а не тихий)
+  const notices: string[] = [];
+
+  // покупатель (морф-связь: компания или человек)
+  if (payload.counterparty_guid) {
+    const buyer = await findBuyer(payload.counterparty_guid);
+
+    if (buyer?.companyId) {
+      refs.pokupatelCompanyId = buyer.companyId;
+    } else if (buyer?.personId) {
+      refs.pokupatelPersonId = buyer.personId;
+    } else {
+      missing.push(
+        `покупатель «${(payload.counterparty ?? '').trim() || payload.counterparty_guid}» не найден в CRM`,
+      );
+    }
+  }
+
+  // контактное лицо — только человек
+  if (payload.contact_person_guid) {
+    const byReestr = await findPersonByReestr(payload.contact_person_guid);
+    const person = byReestr?.personId
+      ? null
+      : await findPersonByObjectGuid(payload.contact_person_guid);
+
+    if (byReestr?.personId) {
+      refs.kontaktnoeLicoId = byReestr.personId;
+    } else if (person?.id) {
+      refs.kontaktnoeLicoId = String(person.id);
+    } else if (payload.counterparty_guid === payload.contact_person_guid) {
+      // в 1С в поле «контактное лицо» бывает подставлен сам контрагент (организация):
+      // человека там нет — поле оставляем пустым, как в разовом загрузчике
+      notices.push('контактное лицо = сам покупатель (организация) — поле оставлено пустым');
+    } else {
+      missing.push(
+        `контактное лицо «${(payload.contact_person ?? '').trim() || payload.contact_person_guid}» не найдено`,
+      );
+    }
+  }
+
+  // сотрудники: мастер, приёмщик, ответственный
+  const employees: [string | undefined, keyof ServiceDocRefs, string][] = [
+    [payload.master_guid, 'masterId', 'мастер'],
+    [payload.receiver_guid, 'priyomshchikId', 'приёмщик'],
+    [payload.responsible_guid, 'otvetstvennyyId', 'ответственный'],
+  ];
+
+  for (const [guid, key, label] of employees) {
+    if (!guid) {
+      continue;
+    }
+
+    const sotrudnik = await findSotrudnikByGuid(guid);
+
+    if (sotrudnik?.id) {
+      refs[key] = String(sotrudnik.id);
+    } else {
+      missing.push(`${label} (guid ${guid}) не найден в «Сотрудниках»`);
+    }
+  }
+
+  // договор
+  if (payload.agreement_guid) {
+    const dogovor = await findDogovorByGuid(payload.agreement_guid);
+
+    if (dogovor?.id) {
+      refs.dogovorId = String(dogovor.id);
+    } else {
+      missing.push(
+        `договор «${(payload.agreement ?? '').trim() || payload.agreement_guid}» не найден`,
+      );
+    }
+  }
+
+  // Владелец не найден — задача возвращается в очередь (решение 02.10.2026).
+  // Пустое поле в 1С (нет guid) сюда не попадает: поле просто не трогаем.
+  if (missing.length) {
+    return pending(missing.join('; '));
+  }
+
+  const { fields, notes } = buildServiceDocFields(payload, refs);
+  const allNotes = [...notices, ...notes];
+
+  if (existing?.id) {
+    await updateOne(REMONT_PLURAL, REMONT_SINGULAR, String(existing.id), fields);
+  } else {
+    const created = await createOne(REMONT_PLURAL, REMONT_SINGULAR, fields);
+
+    if (!created?.id) {
+      throw new Error('карточка ДС не создана');
+    }
+  }
+
+  return { status: 'done', note: allNotes.length ? allNotes.join('; ') : undefined };
+};
+
 /** Обработка одной задачи очереди. */
 export const processTask = async (task: QueueTask): Promise<ProcessOutcome> => {
   const payload = (task.payload ?? {}) as { deleted?: boolean };
@@ -550,6 +738,10 @@ export const processTask = async (task: QueueTask): Promise<ProcessOutcome> => {
       ownerGuid: payload?.owner_guid,
       deleted: payload?.deleted,
     });
+  }
+
+  if (task.objectType === 'УниверсальныйСервис') {
+    return processServiceDoc(task);
   }
 
   throw new Error(`неизвестный objectType: ${task.objectType}`);

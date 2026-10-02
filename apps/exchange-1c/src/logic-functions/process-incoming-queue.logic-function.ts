@@ -17,10 +17,13 @@ type TaskResult = {
 const handler = async () => {
   const settings = readSettings();
 
+  // order_by по времени прихода: иначе удаление может обработаться раньше создания
+  // и карточка останется активной, хотя в 1С она удалена
   const tasks = (await findMany(
     'queueTasks',
     `direction[eq]:IN,status[eq]:${TASK_STATUS.pending}`,
     settings.maxTasksPerRun,
+    'createdAt[AscNullsLast]',
   )) as unknown as QueueTask[];
 
   const results: TaskResult[] = [];
