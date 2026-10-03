@@ -2,10 +2,15 @@ export const APP_DISPLAY_NAME = 'Профит';
 export const APP_DESCRIPTION = 'Профит мастера и менеджера в карточке ремонта';
 export const APPLICATION_UNIVERSAL_IDENTIFIER = 'eb1d5626-a1d6-4d3a-b913-0977e2479e95';
 export const DEFAULT_ROLE_UNIVERSAL_IDENTIFIER = 'db5c7835-c3e1-4eb6-b910-699821e38c02';
-export const MAIN_PAGE_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
-  '82618b5d-2470-4a8c-9de8-4f97c8aa0fdb';
-export const MAIN_PAGE_LAYOUT_UNIVERSAL_IDENTIFIER = 'd2e7754a-986c-46dd-abec-9f80d299006e';
-export const MAIN_PAGE_LAYOUT_TAB_UNIVERSAL_IDENTIFIER = 'd2703cd2-f79d-43f8-9d43-b3eef893cf0b';
-export const MAIN_PAGE_WIDGET_UNIVERSAL_IDENTIFIER = '60ca4630-b7cf-499b-b546-1e213c463ecc';
-export const MAIN_PAGE_NAVIGATION_MENU_ITEM_UNIVERSAL_IDENTIFIER =
-  '42293770-ecde-44c6-9d4d-c35189099528';
+
+/** Экран настроек приложения: ставки профита на каждого пользователя CRM. */
+export const PROFIT_SETTINGS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
+  '57388ac8-4c20-4574-b5ba-3f4b6f4965d3';
+
+/** Маршрут чтения настроек профита. */
+export const PROFIT_SETTINGS_GET_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'a03bf92c-6e08-4e36-b442-b019efde7964';
+
+/** Маршрут сохранения настроек профита. */
+export const PROFIT_SETTINGS_SAVE_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'e5bdf114-db6e-4b06-837b-3281f8683c67';
