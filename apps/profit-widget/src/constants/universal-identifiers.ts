@@ -11,6 +11,10 @@ export const PROFIT_SETTINGS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
 export const PROFIT_CARD_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
   '561534d5-19fe-47e2-9687-67a3afd1411f';
 
+/** Отчёт «Профит по ремонтам» — виджет дашборда. */
+export const PROFIT_REPORT_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
+  'b319eb00-2b3d-476a-86f7-fa961bc18ddd';
+
 /** Маршрут чтения настроек профита. */
 export const PROFIT_SETTINGS_GET_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
   'a03bf92c-6e08-4e36-b442-b019efde7964';
