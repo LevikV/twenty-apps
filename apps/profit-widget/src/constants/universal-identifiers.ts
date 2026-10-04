@@ -7,6 +7,10 @@ export const DEFAULT_ROLE_UNIVERSAL_IDENTIFIER = 'db5c7835-c3e1-4eb6-b910-699821
 export const PROFIT_SETTINGS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
   '57388ac8-4c20-4574-b5ba-3f4b6f4965d3';
 
+/** Виджет профита на карточке ремонта. */
+export const PROFIT_CARD_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
+  '561534d5-19fe-47e2-9687-67a3afd1411f';
+
 /** Маршрут чтения настроек профита. */
 export const PROFIT_SETTINGS_GET_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
   'a03bf92c-6e08-4e36-b442-b019efde7964';
