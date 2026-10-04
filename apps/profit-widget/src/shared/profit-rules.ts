@@ -20,10 +20,8 @@ export type ProfitDirection = 'remont' | 'zapravka' | 'tender' | 'zakaz';
 
 export type ProfitBase =
   | 'services'
-  | 'materialsProfit'
-  | 'materialsSum'
   | 'goodsProfit'
-  | 'contractorAmount'
+  | 'materialsSum'
   | 'fixedPerItem';
 
 export type ProfitRole = 'master' | 'otvetstvennyy' | 'priyomshchik';
@@ -85,19 +83,15 @@ export const ROLE_LABELS: Record<ProfitRole, string> = {
 
 export const BASE_ORDER: ProfitBase[] = [
   'services',
-  'materialsProfit',
-  'materialsSum',
   'goodsProfit',
-  'contractorAmount',
+  'materialsSum',
   'fixedPerItem',
 ];
 
 export const BASE_LABELS: Record<ProfitBase, string> = {
   services: 'Сумма услуг',
-  materialsProfit: 'Прибыль материалов',
+  goodsProfit: 'Прибыль по товарам (материалам)',
   materialsSum: 'Сумма материалов',
-  goodsProfit: 'Прибыль товаров',
-  contractorAmount: 'Стоимость подрядчика',
   fixedPerItem: 'Фикс за единицу',
 };
 
@@ -140,7 +134,7 @@ export const defaultProfitSettings = (): ProfitSettings => ({
  * Начальные правила по ремонту оборудования (согласовано 2026-10-03):
  *   Мастер          → сумма услуг × 80 %
  *   Ответственный   → сумма услуг × 20 %
- *   Ответственный   → прибыль материалов × 30 %
+ *   Ответственный   → прибыль по товарам (материалам) × 30 %
  * База услуг — за вычетом стоимости подрядчика, наценка на товар 50 %.
  */
 export const remontStarterRules = (): DirectionRule[] => [
@@ -155,7 +149,7 @@ export const remontStarterRules = (): DirectionRule[] => [
   {
     id: 'remont-otv-materials',
     role: 'otvetstvennyy',
-    base: 'materialsProfit',
+    base: 'goodsProfit',
     value: 30,
     unit: 'percent',
   },
@@ -213,14 +207,28 @@ export const isRole = (value: unknown): value is ProfitRole =>
 export const isUnit = (value: unknown): value is ProfitUnit =>
   value === 'percent' || value === 'rub';
 
+/** Старые имена баз, чтобы уже сохранённые настройки не теряли правила. */
+const LEGACY_BASES: Record<string, ProfitBase> = {
+  materialsProfit: 'goodsProfit',
+};
+
+export const normalizeBase = (value: unknown): ProfitBase | null => {
+  if (isBase(value)) {
+    return value;
+  }
+
+  return typeof value === 'string' ? (LEGACY_BASES[value] ?? null) : null;
+};
+
 const normalizeRule = (value: unknown): DirectionRule | null => {
   if (value === null || typeof value !== 'object') {
     return null;
   }
 
   const candidate = value as Record<string, unknown>;
+  const base = normalizeBase(candidate.base);
 
-  if (!isRole(candidate.role) || !isBase(candidate.base)) {
+  if (!isRole(candidate.role) || base === null) {
     return null;
   }
 
@@ -232,7 +240,7 @@ const normalizeRule = (value: unknown): DirectionRule | null => {
         ? candidate.id
         : newRuleId(),
     role: candidate.role,
-    base: candidate.base,
+    base,
     value: clampByUnit(candidate.value, unit),
     unit,
   };
@@ -244,11 +252,12 @@ const normalizePersonalRule = (value: unknown): PersonalRule | null => {
   }
 
   const candidate = value as Record<string, unknown>;
+  const base = normalizeBase(candidate.base);
 
   if (
     typeof candidate.memberId !== 'string' ||
     candidate.memberId.length === 0 ||
-    !isBase(candidate.base)
+    base === null
   ) {
     return null;
   }
@@ -262,7 +271,7 @@ const normalizePersonalRule = (value: unknown): PersonalRule | null => {
         : newRuleId(),
     memberId: candidate.memberId,
     direction: isDirection(candidate.direction) ? candidate.direction : 'remont',
-    base: candidate.base,
+    base,
     value: clampByUnit(candidate.value, unit),
     unit,
   };
