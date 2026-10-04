@@ -3,27 +3,43 @@ import { defineSettingsFrontComponent } from 'twenty-sdk/define';
 
 import { PROFIT_SETTINGS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 import {
-  emptyProfitSettings,
-  emptyProfitRate,
+  BASE_LABELS,
+  BASE_ORDER,
+  DIRECTION_LABELS,
+  DIRECTION_ORDER,
+  ROLE_LABELS,
+  ROLE_ORDER,
+  UNIT_LABELS,
+  UNIT_ORDER,
+  clampByUnit,
+  defaultProfitSettings,
+  newRuleId,
   normalizeProfitSettings,
-  parseRateInput,
-  resolveProfitRate,
-  type ProfitRate,
+  parseRateInputSafe,
+  personalRulesOf,
+  resolveDirection,
+  type DirectionRule,
+  type PersonalRule,
+  type ProfitBase,
+  type ProfitDirection,
+  type ProfitRole,
   type ProfitSettings,
+  type ProfitUnit,
 } from 'src/shared/profit-rules';
 
 /**
  * Настройка профита (экран в настройках приложения).
  *
- * На каждого пользователя CRM — строка со ставками:
- *   • % от услуг — процент от суммы работ;
- *   • % от прибыли товаров — процент от прибыли по материалам;
- *   • фикс. ставка — задел под заправки (пока не используется);
- *   • «видит всё» — руководитель: видит и профит мастера, и профит менеджера.
+ * Три блока:
+ *   1. Правила по направлениям — общие для всех: роль в записи → база × значение.
+ *      Здесь же свойства расчёта: вычитать ли стоимость подрядчика из базы услуг
+ *      и наценка на товар (по ней считается закупочная цена материалов).
+ *   2. Сотрудники — галочка «Видит всё» (руководитель) и персональные правила
+ *      (исключения вроде закупщика, который получает процент с материалов).
+ *   3. Кнопка сохранения.
  *
- * Тип расчёта здесь не задаётся: он берётся из самой записи (Мастер / Ответственный).
- * Ставки хранятся во внутреннем хранилище приложения и читаются/пишутся через
- * маршруты `profit-settings` и `profit-settings-save`.
+ * Настройки хранятся во внутреннем хранилище приложения и читаются/пишутся
+ * через маршруты `profit-settings` и `profit-settings-save`.
  */
 
 type MemberRow = {
@@ -57,21 +73,51 @@ const memberName = (member: {
 const sortByName = (rows: MemberRow[]) =>
   [...rows].sort((left, right) => left.name.localeCompare(right.name, 'ru'));
 
-/** Ключ поля ввода: одна строка текста на сотрудника и колонку. */
-const textKey = (memberId: string, field: keyof ProfitRate) =>
-  `${memberId}:${field}`;
+/** Следующее значение по кругу — так устроены кнопки-переключатели. */
+const nextInOrder = <T,>(order: T[], current: T): T => {
+  const index = order.indexOf(current);
 
-const numberToText = (value: number) => (value > 0 ? String(value) : '');
+  return order[(index + 1) % order.length];
+};
+
+const cardStyle: CSSProperties = {
+  border: '1px solid rgba(128, 128, 128, 0.28)',
+  borderRadius: '6px',
+  padding: '8px',
+};
+
+const chipStyle: CSSProperties = {
+  padding: '4px 8px',
+  borderRadius: '6px',
+  border: '1px solid rgba(128, 128, 128, 0.35)',
+  background: 'transparent',
+  color: 'inherit',
+  fontSize: '12px',
+  cursor: 'pointer',
+};
+
+const inputStyle: CSSProperties = {
+  width: '70px',
+  padding: '4px 7px',
+  borderRadius: '6px',
+  border: '1px solid rgba(128, 128, 128, 0.35)',
+  background: 'transparent',
+  color: 'inherit',
+  fontSize: '13px',
+};
 
 const ProfitSettingsScreen = () => {
   const [members, setMembers] = useState<MemberRow[]>([]);
-  const [draft, setDraft] = useState<ProfitSettings>(emptyProfitSettings());
-  const [saved, setSaved] = useState<ProfitSettings>(emptyProfitSettings());
+  const [draft, setDraft] = useState<ProfitSettings>(defaultProfitSettings());
+  const [saved, setSaved] = useState<ProfitSettings>(defaultProfitSettings());
   const [texts, setTexts] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<string>('');
   const [error, setError] = useState<string>('');
+  const [openDirections, setOpenDirections] = useState<Record<string, boolean>>({
+    remont: true,
+  });
 
   useEffect(() => {
     let isRelevant = true;
@@ -134,16 +180,13 @@ const ProfitSettingsScreen = () => {
       const settings = normalizeProfitSettings(settingsJson.settings);
       const nextTexts: Record<string, string> = {};
 
-      rows.forEach((row) => {
-        const rate = resolveProfitRate(settings, row.id);
-
-        nextTexts[textKey(row.id, 'servicesPercent')] = numberToText(
-          rate.servicesPercent,
-        );
-        nextTexts[textKey(row.id, 'materialsPercent')] = numberToText(
-          rate.materialsPercent,
-        );
-        nextTexts[textKey(row.id, 'fixedRate')] = numberToText(rate.fixedRate);
+      DIRECTION_ORDER.forEach((direction) => {
+        resolveDirection(settings, direction).rules.forEach((rule) => {
+          nextTexts[rule.id] = rule.value > 0 ? String(rule.value) : '';
+        });
+      });
+      settings.personal.forEach((rule) => {
+        nextTexts[rule.id] = rule.value > 0 ? String(rule.value) : '';
       });
 
       if (isRelevant) {
@@ -172,34 +215,135 @@ const ProfitSettingsScreen = () => {
     [draft, saved],
   );
 
-  /** Строка сотрудника в draft: создаётся при первом изменении. */
-  const patchRate = (
-    memberId: string,
-    patch: Partial<ProfitRate>,
-  ): void => {
+  const touch = () => {
     setMessage('');
     setError('');
+  };
+
+  const patchDirection = (
+    direction: ProfitDirection,
+    patch: Partial<{ contractorDeduction: boolean; materialsMarkupPercent: number }>,
+  ) => {
+    touch();
     setDraft((current) => ({
-      rates: {
-        ...current.rates,
-        [memberId]: { ...(current.rates[memberId] ?? emptyProfitRate()), ...patch },
+      ...current,
+      directions: {
+        ...current.directions,
+        [direction]: { ...resolveDirection(current, direction), ...patch },
       },
     }));
   };
 
-  const onText = (
-    memberId: string,
-    field: 'servicesPercent' | 'materialsPercent' | 'fixedRate',
-    value: string,
+  const patchRule = (
+    direction: ProfitDirection,
+    ruleId: string,
+    patch: Partial<DirectionRule>,
   ) => {
-    setTexts((current) => ({ ...current, [textKey(memberId, field)]: value }));
-    patchRate(memberId, { [field]: parseRateInput(value) });
+    touch();
+    setDraft((current) => ({
+      ...current,
+      directions: {
+        ...current.directions,
+        [direction]: {
+          ...resolveDirection(current, direction),
+          rules: resolveDirection(current, direction).rules.map((rule) =>
+            rule.id === ruleId ? { ...rule, ...patch } : rule,
+          ),
+        },
+      },
+    }));
+  };
+
+  const addRule = (direction: ProfitDirection) => {
+    const rule: DirectionRule = {
+      id: newRuleId(),
+      role: 'master',
+      base: 'services',
+      value: 0,
+      unit: 'percent',
+    };
+
+    touch();
+    setTexts((current) => ({ ...current, [rule.id]: '' }));
+    setDraft((current) => ({
+      ...current,
+      directions: {
+        ...current.directions,
+        [direction]: {
+          ...resolveDirection(current, direction),
+          rules: [...resolveDirection(current, direction).rules, rule],
+        },
+      },
+    }));
+  };
+
+  const removeRule = (direction: ProfitDirection, ruleId: string) => {
+    touch();
+    setDraft((current) => ({
+      ...current,
+      directions: {
+        ...current.directions,
+        [direction]: {
+          ...resolveDirection(current, direction),
+          rules: resolveDirection(current, direction).rules.filter(
+            (rule) => rule.id !== ruleId,
+          ),
+        },
+      },
+    }));
+  };
+
+  const addPersonal = (memberId: string) => {
+    const rule: PersonalRule = {
+      id: newRuleId(),
+      memberId,
+      direction: 'remont',
+      base: 'materialsSum',
+      value: 0,
+      unit: 'percent',
+    };
+
+    touch();
+    setTexts((current) => ({ ...current, [rule.id]: '' }));
+    setDraft((current) => ({ ...current, personal: [...current.personal, rule] }));
+  };
+
+  const patchPersonal = (ruleId: string, patch: Partial<PersonalRule>) => {
+    touch();
+    setDraft((current) => ({
+      ...current,
+      personal: current.personal.map((rule) =>
+        rule.id === ruleId ? { ...rule, ...patch } : rule,
+      ),
+    }));
+  };
+
+  const removePersonal = (ruleId: string) => {
+    touch();
+    setDraft((current) => ({
+      ...current,
+      personal: current.personal.filter((rule) => rule.id !== ruleId),
+    }));
   };
 
   const toggleSeesAll = (memberId: string) => {
-    const rate = draft.rates[memberId] ?? emptyProfitRate();
+    touch();
+    setDraft((current) => ({
+      ...current,
+      seesAll: current.seesAll.includes(memberId)
+        ? current.seesAll.filter((id) => id !== memberId)
+        : [...current.seesAll, memberId],
+    }));
+  };
 
-    patchRate(memberId, { seesAll: !rate.seesAll });
+  const onValueInput = (
+    ruleId: string,
+    unit: ProfitUnit,
+    raw: string,
+    apply: (value: number) => void,
+  ) => {
+    setTexts((current) => ({ ...current, [ruleId]: raw }));
+    apply(clampByUnit(parseRateInputSafe(raw), unit));
   };
 
   const save = async () => {
@@ -254,112 +398,327 @@ const ProfitSettingsScreen = () => {
     );
   }
 
-  const inputStyle: CSSProperties = {
-    width: '72px',
-    padding: '5px 7px',
-    borderRadius: '6px',
-    border: '1px solid rgba(128, 128, 128, 0.35)',
-    background: 'transparent',
-    color: 'inherit',
-    fontSize: '13px',
-  };
+  const sectionTitle: CSSProperties = { fontWeight: 600, fontSize: '14px' };
 
   return (
     <div
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: '12px',
+        gap: '14px',
         padding: '8px',
         fontSize: '13px',
       }}
     >
       <div>
-        <div style={{ fontWeight: 600, fontSize: '14px' }}>Профит сотрудников</div>
+        <div style={sectionTitle}>Правила профита</div>
         <div style={{ opacity: 0.75, marginTop: '4px' }}>
-          Проценты считаются от суммы работ и от прибыли по материалам. Тип расчёта берётся
-          из самой записи: где сотрудник указан Мастером — мастерский расчёт, где
-          Ответственным — менеджерский. «Видит всё» — руководитель: видит оба профита и
-          итог. Фикс. ставка пока не используется (задел под заправки).
+          Правила направления действуют для всех: в записи берётся роль (Мастер,
+          Ответственный, Приёмщик) и от неё считается процент от выбранной базы.
+          Персональное правило — исключение для конкретного сотрудника. Проценты и
+          правила меняются здесь, пересборка приложения не нужна.
         </div>
       </div>
 
-      {members.map((member) => {
-        const rate = draft.rates[member.id] ?? emptyProfitRate();
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {DIRECTION_ORDER.map((direction) => {
+          const settings = resolveDirection(draft, direction);
+          const isOpen = openDirections[direction] === true;
 
-        return (
-          <div
-            key={member.id}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              flexWrap: 'wrap',
-              border: '1px solid rgba(128, 128, 128, 0.28)',
-              borderRadius: '6px',
-              padding: '8px',
-            }}
-          >
-            <span style={{ fontWeight: 600, minWidth: '180px' }}>{member.name}</span>
-
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ opacity: 0.8 }}>% услуг</span>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={texts[textKey(member.id, 'servicesPercent')] ?? ''}
-                onChange={(event) =>
-                  onText(member.id, 'servicesPercent', event.target.value)
+          return (
+            <div key={direction} style={cardStyle}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  cursor: 'pointer',
+                }}
+                onClick={() =>
+                  setOpenDirections((current) => ({
+                    ...current,
+                    [direction]: !isOpen,
+                  }))
                 }
-                style={inputStyle}
-              />
-            </label>
+              >
+                <span style={{ fontWeight: 600 }}>
+                  {isOpen ? '▾' : '▸'} {DIRECTION_LABELS[direction]}
+                </span>
+                <span style={{ opacity: 0.6 }}>
+                  {settings.rules.length === 0
+                    ? 'правил нет'
+                    : `правил: ${settings.rules.length}`}
+                </span>
+              </div>
 
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ opacity: 0.8 }}>% прибыли товаров</span>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={texts[textKey(member.id, 'materialsPercent')] ?? ''}
-                onChange={(event) =>
-                  onText(member.id, 'materialsPercent', event.target.value)
-                }
-                style={inputStyle}
-              />
-            </label>
+              {isOpen ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px',
+                    marginTop: '8px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={settings.contractorDeduction}
+                        onChange={() =>
+                          patchDirection(direction, {
+                            contractorDeduction: !settings.contractorDeduction,
+                          })
+                        }
+                      />
+                      <span>Вычитать стоимость подрядчика из базы услуг</span>
+                    </label>
 
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ opacity: 0.8 }}>фикс. ставка</span>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={texts[textKey(member.id, 'fixedRate')] ?? ''}
-                onChange={(event) =>
-                  onText(member.id, 'fixedRate', event.target.value)
-                }
-                style={inputStyle}
-              />
-            </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ opacity: 0.8 }}>Наценка на товар, %</span>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={
+                          texts[`${direction}:markup`] ??
+                          (settings.materialsMarkupPercent > 0
+                            ? String(settings.materialsMarkupPercent)
+                            : '')
+                        }
+                        onChange={(event) => {
+                          const raw = event.target.value;
 
-            <label
-              style={{
-                marginLeft: 'auto',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                cursor: 'pointer',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={rate.seesAll}
-                onChange={() => toggleSeesAll(member.id)}
-              />
-              <span>Видит всё</span>
-            </label>
-          </div>
-        );
-      })}
+                          setTexts((current) => ({
+                            ...current,
+                            [`${direction}:markup`]: raw,
+                          }));
+                          patchDirection(direction, {
+                            materialsMarkupPercent: clampByUnit(
+                              parseRateInputSafe(raw),
+                              'percent',
+                            ),
+                          });
+                        }}
+                        style={inputStyle}
+                      />
+                    </label>
+                  </div>
+
+                  {settings.rules.map((rule) => (
+                    <div
+                      key={rule.id}
+                      style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}
+                    >
+                      <button
+                        type="button"
+                        title="Роль в записи — нажмите, чтобы сменить"
+                        style={chipStyle}
+                        onClick={() =>
+                          patchRule(direction, rule.id, {
+                            role: nextInOrder(ROLE_ORDER, rule.role),
+                          })
+                        }
+                      >
+                        {ROLE_LABELS[rule.role]} ▾
+                      </button>
+
+                      <button
+                        type="button"
+                        title="База расчёта — нажмите, чтобы сменить"
+                        style={chipStyle}
+                        onClick={() =>
+                          patchRule(direction, rule.id, {
+                            base: nextInOrder(BASE_ORDER, rule.base),
+                          })
+                        }
+                      >
+                        {BASE_LABELS[rule.base]} ▾
+                      </button>
+
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={texts[rule.id] ?? ''}
+                        onChange={(event) =>
+                          onValueInput(rule.id, rule.unit, event.target.value, (value) =>
+                            patchRule(direction, rule.id, { value }),
+                          )
+                        }
+                        style={inputStyle}
+                      />
+
+                      <button
+                        type="button"
+                        title="Процент или рубли — нажмите, чтобы сменить"
+                        style={chipStyle}
+                        onClick={() =>
+                          patchRule(direction, rule.id, {
+                            unit: nextInOrder(UNIT_ORDER, rule.unit),
+                            value: clampByUnit(
+                              rule.value,
+                              nextInOrder(UNIT_ORDER, rule.unit),
+                            ),
+                          })
+                        }
+                      >
+                        {UNIT_LABELS[rule.unit]} ▾
+                      </button>
+
+                      <button
+                        type="button"
+                        title="Удалить правило"
+                        style={{ ...chipStyle, marginLeft: 'auto' }}
+                        onClick={() => removeRule(direction, rule.id)}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+
+                  <div>
+                    <button
+                      type="button"
+                      style={chipStyle}
+                      onClick={() => addRule(direction)}
+                    >
+                      + Добавить правило
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+
+      <div>
+        <div style={sectionTitle}>Сотрудники</div>
+        <div style={{ opacity: 0.75, marginTop: '4px' }}>
+          «Видит всё» — сотрудник видит в карточке профит всех ролей и итог (руководитель).
+          Персональные правила — исключения для конкретного человека, например процент
+          с материалов закупщику.
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {members.map((member) => {
+          const rules = personalRulesOf(draft, member.id);
+
+          return (
+            <div key={member.id} style={cardStyle}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontWeight: 600 }}>{member.name}</span>
+                {member.email ? (
+                  <span style={{ opacity: 0.6 }}>{member.email}</span>
+                ) : null}
+                <label
+                  style={{
+                    marginLeft: 'auto',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={draft.seesAll.includes(member.id)}
+                    onChange={() => toggleSeesAll(member.id)}
+                  />
+                  <span>Видит всё</span>
+                </label>
+              </div>
+
+              {rules.map((rule) => (
+                <div
+                  key={rule.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    flexWrap: 'wrap',
+                    marginTop: '8px',
+                  }}
+                >
+                  <button
+                    type="button"
+                    title="Направление — нажмите, чтобы сменить"
+                    style={chipStyle}
+                    onClick={() =>
+                      patchPersonal(rule.id, {
+                        direction: nextInOrder(DIRECTION_ORDER, rule.direction),
+                      })
+                    }
+                  >
+                    {DIRECTION_LABELS[rule.direction]} ▾
+                  </button>
+
+                  <button
+                    type="button"
+                    title="База расчёта — нажмите, чтобы сменить"
+                    style={chipStyle}
+                    onClick={() =>
+                      patchPersonal(rule.id, {
+                        base: nextInOrder(BASE_ORDER, rule.base),
+                      })
+                    }
+                  >
+                    {BASE_LABELS[rule.base]} ▾
+                  </button>
+
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={texts[rule.id] ?? ''}
+                    onChange={(event) =>
+                      onValueInput(rule.id, rule.unit, event.target.value, (value) =>
+                        patchPersonal(rule.id, { value }),
+                      )
+                    }
+                    style={inputStyle}
+                  />
+
+                  <button
+                    type="button"
+                    title="Процент или рубли — нажмите, чтобы сменить"
+                    style={chipStyle}
+                    onClick={() =>
+                      patchPersonal(rule.id, {
+                        unit: nextInOrder(UNIT_ORDER, rule.unit),
+                        value: clampByUnit(
+                          rule.value,
+                          nextInOrder(UNIT_ORDER, rule.unit),
+                        ),
+                      })
+                    }
+                  >
+                    {UNIT_LABELS[rule.unit]} ▾
+                  </button>
+
+                  <button
+                    type="button"
+                    title="Удалить правило"
+                    style={{ ...chipStyle, marginLeft: 'auto' }}
+                    onClick={() => removePersonal(rule.id)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+
+              <div style={{ marginTop: '8px' }}>
+                <button
+                  type="button"
+                  style={chipStyle}
+                  onClick={() => addPersonal(member.id)}
+                >
+                  + Персональное правило
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
         <button
@@ -389,6 +748,6 @@ const ProfitSettingsScreen = () => {
 export default defineSettingsFrontComponent({
   universalIdentifier: PROFIT_SETTINGS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER,
   name: 'profitSettings',
-  description: 'Профит сотрудников: проценты и фиксированные ставки',
+  description: 'Профит сотрудников: правила по направлениям и персональные исключения',
   component: ProfitSettingsScreen,
 });
