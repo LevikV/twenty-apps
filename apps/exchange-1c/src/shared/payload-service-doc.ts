@@ -1,8 +1,10 @@
 /**
  * Формат payload документов сервиса (ДС) в очереди обмена.
  * Тип задачи — `objectType = "УниверсальныйСервис"`.
- * Зафиксирован по факту 02.10.2026: создание/изменение — 67 ключей, тот же состав,
+ * Зафиксирован по факту 02.10.2026: создание/изменение — 64 ключа, тот же состав,
  * что в файле выгрузки; удаление — 4 ключа (guid, deleted, change_date, native_guid).
+ * 05.10.2026 добавлены 4 ключа подрядчика (64 → 68): contractor, contractor_guid,
+ * contractor_native_guid, contractor_cost.
  */
 
 export type ServiceDocGood = {
@@ -40,6 +42,12 @@ export type ServiceDocPayload = {
   receiver_guid?: string;
   responsible?: string;
   responsible_guid?: string;
+  /** Подрядчик — контрагент 1С (компания или физлицо); добавлено 05.10.2026 */
+  contractor?: string;
+  contractor_guid?: string;
+  contractor_native_guid?: string;
+  /** Стоимость подрядчика, руб. (2 знака); 0 — реквизит не заполнен */
+  contractor_cost?: number;
   agreement?: string;
   agreement_guid?: string;
   malfunction?: string;

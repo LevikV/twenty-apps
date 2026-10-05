@@ -8,6 +8,8 @@
  *  - суммы считаются из строк `goods[]`, а не из шапки документа;
  *  - скидка пишется долей: поле-процент в Twenty хранит 10 % как 0.1;
  *  - «Статус» = «Завершено» только при стадии «Выдан»;
+ *  - подрядчик (`contractor_guid`) ищется как контрагент (компания или человек),
+ *    стоимость (`contractor_cost`) пишется в «Стоимость подрядчика» только если больше нуля;
  *  - пустое поле из payload не затирает заполненное (см. `compact` в `crm.ts`).
  */
 
@@ -55,6 +57,8 @@ export const VID_OPLATY: Record<string, string> = {
 export type ServiceDocRefs = {
   pokupatelCompanyId?: string;
   pokupatelPersonId?: string;
+  podryadchikCompanyId?: string;
+  podryadchikPersonId?: string;
   kontaktnoeLicoId?: string;
   masterId?: string;
   priyomshchikId?: string;
@@ -218,6 +222,10 @@ export const buildServiceDocFields = (
 
   const discount = Number(payload.discount ?? 0);
 
+  // «Стоимость подрядчика» — чисто информационный реквизит 1С. Ноль означает
+  // «не заполнено», поэтому нулевое значение не пишем: пустое не затирает заполненное.
+  const contractorCost = Number(payload.contractor_cost ?? 0) || 0;
+
   const fields = compact({
     name: number ? `ДС${number}` : undefined,
     guid: payload.guid,
@@ -240,6 +248,7 @@ export const buildServiceDocFields = (
     summaBezSkidki: money(worksWithoutDiscount + matsWithoutDiscount),
     stoimostRabot: money(works),
     stoimostMaterialov: money(mats),
+    stoimostPodryadchika: contractorCost > 0 ? money(contractorCost) : undefined,
     // поле-процент: Twenty хранит долю (10 % → 0.1)
     skidka: discount ? Math.round((discount / 100) * 1_000_000) / 1_000_000 : undefined,
     vidOplaty,

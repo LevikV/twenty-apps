@@ -546,8 +546,11 @@ const findDogovorByGuid = async (guid: string) =>
     | (Record<string, unknown> & { id: string })
     | undefined;
 
-/** Покупатель ДС: компания по objectGuid, иначе человек (реестр, затем objectGuid). */
-const findBuyer = async (
+/**
+ * Контрагент 1С (покупатель ДС или подрядчик): компания по objectGuid,
+ * иначе человек — сначала через «Реестр сопоставлений», затем по objectGuid.
+ */
+const findCounterparty = async (
   guid: string,
 ): Promise<{ companyId?: string; personId?: string } | null> => {
   const company = await findCompanyByGuid(guid);
@@ -617,7 +620,7 @@ const processServiceDoc = async (task: QueueTask): Promise<ProcessOutcome> => {
 
   // покупатель (морф-связь: компания или человек)
   if (payload.counterparty_guid) {
-    const buyer = await findBuyer(payload.counterparty_guid);
+    const buyer = await findCounterparty(payload.counterparty_guid);
 
     if (buyer?.companyId) {
       refs.pokupatelCompanyId = buyer.companyId;
@@ -626,6 +629,22 @@ const processServiceDoc = async (task: QueueTask): Promise<ProcessOutcome> => {
     } else {
       missing.push(
         `покупатель «${(payload.counterparty ?? '').trim() || payload.counterparty_guid}» не найден в CRM`,
+      );
+    }
+  }
+
+  // подрядчик (морф-связь: компания или человек) — в 1С это тоже контрагент,
+  // поэтому ищем тем же способом, что покупателя
+  if (payload.contractor_guid) {
+    const contractor = await findCounterparty(payload.contractor_guid);
+
+    if (contractor?.companyId) {
+      refs.podryadchikCompanyId = contractor.companyId;
+    } else if (contractor?.personId) {
+      refs.podryadchikPersonId = contractor.personId;
+    } else {
+      missing.push(
+        `подрядчик «${(payload.contractor ?? '').trim() || payload.contractor_guid}» не найден в CRM`,
       );
     }
   }
