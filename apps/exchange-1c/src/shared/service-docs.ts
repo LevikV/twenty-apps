@@ -9,8 +9,10 @@
  *  - скидка пишется долей: поле-процент в Twenty хранит 10 % как 0.1;
  *  - «Статус» = «Завершено» только при стадии «Выдан»;
  *  - подрядчик (`contractor_guid`) ищется как контрагент (компания или человек),
- *    стоимость (`contractor_cost`) пишется в «Стоимость подрядчика» только если больше нуля;
- *  - пустое поле из payload не затирает заполненное (см. `compact` в `crm.ts`).
+ *    стоимость (`contractor_cost`) пишется в «Стоимость подрядчика» как есть (0 — тоже значение);
+ *  - «зеркало» ДС (05.10.2026): если ключ в payload ЕСТЬ, поле пишется как есть — пустое
+ *    значение очищает поле в CRM; если ключа нет вовсе, поле не трогаем. Карточка ДС —
+ *    одна на документ (`guid` уникален), поэтому «дополнять» тут нечего.
  */
 
 import { compact } from 'src/shared/crm';
@@ -53,17 +55,18 @@ export const VID_OPLATY: Record<string, string> = {
   'Наличный расчет': 'NALICHNYMI',
 };
 
-/** Ссылки на записи CRM, которые обработчик должен найти до раскладки. */
+/** Ссылки на записи CRM, которые обработчик должен найти до раскладки.
+ *  `null` означает «в 1С поле очищено — снять связь в CRM» («зеркало» ДС). */
 export type ServiceDocRefs = {
-  pokupatelCompanyId?: string;
-  pokupatelPersonId?: string;
-  podryadchikCompanyId?: string;
-  podryadchikPersonId?: string;
-  kontaktnoeLicoId?: string;
-  masterId?: string;
-  priyomshchikId?: string;
-  otvetstvennyyId?: string;
-  dogovorId?: string;
+  pokupatelCompanyId?: string | null;
+  pokupatelPersonId?: string | null;
+  podryadchikCompanyId?: string | null;
+  podryadchikPersonId?: string | null;
+  kontaktnoeLicoId?: string | null;
+  masterId?: string | null;
+  priyomshchikId?: string | null;
+  otvetstvennyyId?: string | null;
+  dogovorId?: string | null;
 };
 
 /** «2026-10-02 19:27:10» (местное время 1С) → ISO со смещением +10. */
@@ -157,6 +160,17 @@ export const buildSostavRabot = (payload: ServiceDocPayload): string => {
   return blocks.join('\n\n');
 };
 
+/** Ключ присутствует в payload — даже если значение пустое. */
+export const hasKey = (payload: ServiceDocPayload, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(payload, key);
+
+/** Пустое значение 1С: '', null, undefined или пустой массив. */
+export const isBlank = (value: unknown): boolean =>
+  value === undefined ||
+  value === null ||
+  (typeof value === 'string' && value.trim() === '') ||
+  (Array.isArray(value) && value.length === 0);
+
 const boolOrUndefined = (value: unknown): boolean | undefined =>
   value === undefined || value === null ? undefined : Boolean(value);
 
@@ -222,38 +236,77 @@ export const buildServiceDocFields = (
 
   const discount = Number(payload.discount ?? 0);
 
-  // «Стоимость подрядчика» — чисто информационный реквизит 1С. Ноль означает
-  // «не заполнено», поэтому нулевое значение не пишем: пустое не затирает заполненное.
+  // Стоимость подрядчика — информационный реквизит 1С, ноль здесь законное значение.
   const contractorCost = Number(payload.contractor_cost ?? 0) || 0;
 
-  const fields = compact({
-    name: number ? `ДС${number}` : undefined,
-    guid: payload.guid,
-    aktiven: payload.deleted === true ? false : true,
-    priznakOplaty: boolOrUndefined(payload.payment_sign),
-    poGarantii: boolOrUndefined(payload.by_warranty),
-    vypisanSchet: boolOrUndefined(payload.invoice_issued),
-    stadiya,
-    status: stadiya ? (stadiya === CLOSED_STADIYA ? STATUS_DONE : STATUS_ACTIVE) : undefined,
-    proveden,
-    dataPriyomki,
-    dataRemonta,
-    oborudovanie: model || undefined,
-    neispravnost: String(payload.malfunction ?? '').trim() || undefined,
-    rezultatDiagnostiki: String(payload.diagnostics_results ?? '').trim() || undefined,
-    rekomendaciiPoRemontu:
-      String(payload.repair_recommendations ?? '').trim() || undefined,
-    sostavRabot: sostavRabot ? { markdown: sostavRabot } : undefined,
-    summa: money(works + mats),
-    summaBezSkidki: money(worksWithoutDiscount + matsWithoutDiscount),
-    stoimostRabot: money(works),
-    stoimostMaterialov: money(mats),
-    stoimostPodryadchika: contractorCost > 0 ? money(contractorCost) : undefined,
-    // поле-процент: Twenty хранит долю (10 % → 0.1)
-    skidka: discount ? Math.round((discount / 100) * 1_000_000) / 1_000_000 : undefined,
-    vidOplaty,
-    ...refs,
-  });
+  // --- «зеркало» ДС (05.10.2026): очистили поле в 1С — очищаем и в CRM.
+  // Ключ ЕСТЬ в payload → пишем значение как есть (пусто → null);
+  // ключа нет вовсе → поле не трогаем (старый формат или другой поток).
+  const clears: Record<string, unknown> = {};
+
+  const clearIfBlank = (key: keyof ServiceDocPayload, field: string): void => {
+    if (hasKey(payload, key) && isBlank(payload[key])) {
+      clears[field] = null;
+    }
+  };
+
+  clearIfBlank('malfunction', 'neispravnost');
+  clearIfBlank('diagnostics_results', 'rezultatDiagnostiki');
+  clearIfBlank('repair_recommendations', 'rekomendaciiPoRemontu');
+  clearIfBlank('date_acceptance', 'dataPriyomki');
+  clearIfBlank('date_repair', 'dataRemonta');
+  clearIfBlank('payment_type', 'vidOplaty');
+  clearIfBlank('cartridges', 'oborudovanie');
+  clearIfBlank('goods', 'sostavRabot');
+  clearIfBlank('service_status', 'stadiya');
+  clearIfBlank('service_status', 'status');
+
+  // документ распроведён → «Проведен» очищаем
+  if (hasKey(payload, 'posted') && !payload.posted) {
+    clears.proveden = null;
+  }
+
+  // связи: строковый id — пишем, null — снимаем
+  const refValues: Record<string, unknown> = {};
+
+  for (const [field, value] of Object.entries(refs ?? {})) {
+    if (value !== undefined) {
+      refValues[field] = value;
+    }
+  }
+
+  const fields = {
+    ...compact({
+      name: number ? `ДС${number}` : undefined,
+      guid: payload.guid,
+      aktiven: payload.deleted === true ? false : true,
+      priznakOplaty: boolOrUndefined(payload.payment_sign),
+      poGarantii: boolOrUndefined(payload.by_warranty),
+      vypisanSchet: boolOrUndefined(payload.invoice_issued),
+      stadiya,
+      status: stadiya ? (stadiya === CLOSED_STADIYA ? STATUS_DONE : STATUS_ACTIVE) : undefined,
+      proveden,
+      dataPriyomki,
+      dataRemonta,
+      oborudovanie: model || undefined,
+      neispravnost: String(payload.malfunction ?? '').trim() || undefined,
+      rezultatDiagnostiki: String(payload.diagnostics_results ?? '').trim() || undefined,
+      rekomendaciiPoRemontu:
+        String(payload.repair_recommendations ?? '').trim() || undefined,
+      sostavRabot: sostavRabot ? { markdown: sostavRabot } : undefined,
+      summa: money(works + mats),
+      summaBezSkidki: money(worksWithoutDiscount + matsWithoutDiscount),
+      stoimostRabot: money(works),
+      stoimostMaterialov: money(mats),
+      stoimostPodryadchika: money(contractorCost),
+      // поле-процент: Twenty хранит долю (10 % → 0.1)
+      skidka: Math.round((discount / 100) * 1_000_000) / 1_000_000,
+      vidOplaty,
+    }),
+    ...refValues,
+    // очистки идут последними: null не должен быть выброшен `compact`
+    ...clears,
+  };
 
   return { fields, notes };
 };

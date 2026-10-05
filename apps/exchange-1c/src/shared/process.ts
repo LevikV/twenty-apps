@@ -44,6 +44,8 @@ import {
   buildServiceDocFields,
   CARTRIDGE_TYPE,
   DEVICE_TYPE,
+  hasKey,
+  isBlank,
   type ServiceDocRefs,
 } from 'src/shared/service-docs';
 import type { ServiceDocPayload } from 'src/shared/payload-service-doc';
@@ -618,90 +620,117 @@ const processServiceDoc = async (task: QueueTask): Promise<ProcessOutcome> => {
   // пометки, которые не мешают закрыть задачу (видимый пропуск, а не тихий)
   const notices: string[] = [];
 
-  // покупатель (морф-связь: компания или человек)
-  if (payload.counterparty_guid) {
-    const buyer = await findCounterparty(payload.counterparty_guid);
-
-    if (buyer?.companyId) {
-      refs.pokupatelCompanyId = buyer.companyId;
-    } else if (buyer?.personId) {
-      refs.pokupatelPersonId = buyer.personId;
+  // Покупатель (морф-связь: компания или человек).
+  // «Зеркало»: ключ есть, значение пустое → связь снимаем; ключа нет → не трогаем.
+  if (hasKey(payload, 'counterparty_guid')) {
+    if (isBlank(payload.counterparty_guid)) {
+      refs.pokupatelCompanyId = null;
+      refs.pokupatelPersonId = null;
     } else {
-      missing.push(
-        `покупатель «${(payload.counterparty ?? '').trim() || payload.counterparty_guid}» не найден в CRM`,
-      );
+      const buyer = await findCounterparty(String(payload.counterparty_guid));
+
+      if (buyer?.companyId) {
+        refs.pokupatelCompanyId = buyer.companyId;
+      } else if (buyer?.personId) {
+        refs.pokupatelPersonId = buyer.personId;
+      } else {
+        missing.push(
+          `покупатель «${(payload.counterparty ?? '').trim() || payload.counterparty_guid}» не найден в CRM`,
+        );
+      }
     }
   }
 
-  // подрядчик (морф-связь: компания или человек) — в 1С это тоже контрагент,
-  // поэтому ищем тем же способом, что покупателя
-  if (payload.contractor_guid) {
-    const contractor = await findCounterparty(payload.contractor_guid);
-
-    if (contractor?.companyId) {
-      refs.podryadchikCompanyId = contractor.companyId;
-    } else if (contractor?.personId) {
-      refs.podryadchikPersonId = contractor.personId;
+  // Подрядчик (морф-связь: компания или человек) — в 1С это тоже контрагент,
+  // поэтому ищем тем же способом, что покупателя.
+  if (hasKey(payload, 'contractor_guid')) {
+    if (isBlank(payload.contractor_guid)) {
+      refs.podryadchikCompanyId = null;
+      refs.podryadchikPersonId = null;
     } else {
-      missing.push(
-        `подрядчик «${(payload.contractor ?? '').trim() || payload.contractor_guid}» не найден в CRM`,
-      );
+      const contractor = await findCounterparty(String(payload.contractor_guid));
+
+      if (contractor?.companyId) {
+        refs.podryadchikCompanyId = contractor.companyId;
+      } else if (contractor?.personId) {
+        refs.podryadchikPersonId = contractor.personId;
+      } else {
+        missing.push(
+          `подрядчик «${(payload.contractor ?? '').trim() || payload.contractor_guid}» не найден в CRM`,
+        );
+      }
     }
   }
 
-  // контактное лицо — только человек
-  if (payload.contact_person_guid) {
-    const byReestr = await findPersonByReestr(payload.contact_person_guid);
-    const person = byReestr?.personId
-      ? null
-      : await findPersonByObjectGuid(payload.contact_person_guid);
-
-    if (byReestr?.personId) {
-      refs.kontaktnoeLicoId = byReestr.personId;
-    } else if (person?.id) {
-      refs.kontaktnoeLicoId = String(person.id);
-    } else if (payload.counterparty_guid === payload.contact_person_guid) {
-      // в 1С в поле «контактное лицо» бывает подставлен сам контрагент (организация):
-      // человека там нет — поле оставляем пустым, как в разовом загрузчике
-      notices.push('контактное лицо = сам покупатель (организация) — поле оставлено пустым');
+  // Контактное лицо — только человек.
+  if (hasKey(payload, 'contact_person_guid')) {
+    if (isBlank(payload.contact_person_guid)) {
+      refs.kontaktnoeLicoId = null;
     } else {
-      missing.push(
-        `контактное лицо «${(payload.contact_person ?? '').trim() || payload.contact_person_guid}» не найдено`,
-      );
+      const guid = String(payload.contact_person_guid);
+      const byReestr = await findPersonByReestr(guid);
+      const person = byReestr?.personId ? null : await findPersonByObjectGuid(guid);
+
+      if (byReestr?.personId) {
+        refs.kontaktnoeLicoId = byReestr.personId;
+      } else if (person?.id) {
+        refs.kontaktnoeLicoId = String(person.id);
+      } else if (payload.counterparty_guid === payload.contact_person_guid) {
+        // в 1С в поле «контактное лицо» бывает подставлен сам контрагент (организация):
+        // человека там нет — поле оставляем пустым, как в разовом загрузчике
+        notices.push('контактное лицо = сам покупатель (организация) — поле оставлено пустым');
+      } else {
+        missing.push(
+          `контактное лицо «${(payload.contact_person ?? '').trim() || guid}» не найдено`,
+        );
+      }
     }
   }
 
-  // сотрудники: мастер, приёмщик, ответственный
-  const employees: [string | undefined, keyof ServiceDocRefs, string][] = [
-    [payload.master_guid, 'masterId', 'мастер'],
-    [payload.receiver_guid, 'priyomshchikId', 'приёмщик'],
-    [payload.responsible_guid, 'otvetstvennyyId', 'ответственный'],
-  ];
+  // Сотрудники: мастер, приёмщик, ответственный.
+  const resolveEmployee = async (
+    key: 'master_guid' | 'receiver_guid' | 'responsible_guid',
+    ref: keyof ServiceDocRefs,
+    label: string,
+  ): Promise<void> => {
+    if (!hasKey(payload, key)) {
+      return;
+    }
 
-  for (const [guid, key, label] of employees) {
+    const guid = String(payload[key] ?? '').trim();
+
     if (!guid) {
-      continue;
+      refs[ref] = null;
+      return;
     }
 
     const sotrudnik = await findSotrudnikByGuid(guid);
 
     if (sotrudnik?.id) {
-      refs[key] = String(sotrudnik.id);
+      refs[ref] = String(sotrudnik.id);
     } else {
       missing.push(`${label} (guid ${guid}) не найден в «Сотрудниках»`);
     }
-  }
+  };
 
-  // договор
-  if (payload.agreement_guid) {
-    const dogovor = await findDogovorByGuid(payload.agreement_guid);
+  await resolveEmployee('master_guid', 'masterId', 'мастер');
+  await resolveEmployee('receiver_guid', 'priyomshchikId', 'приёмщик');
+  await resolveEmployee('responsible_guid', 'otvetstvennyyId', 'ответственный');
 
-    if (dogovor?.id) {
-      refs.dogovorId = String(dogovor.id);
+  // Договор
+  if (hasKey(payload, 'agreement_guid')) {
+    if (isBlank(payload.agreement_guid)) {
+      refs.dogovorId = null;
     } else {
-      missing.push(
-        `договор «${(payload.agreement ?? '').trim() || payload.agreement_guid}» не найден`,
-      );
+      const dogovor = await findDogovorByGuid(String(payload.agreement_guid));
+
+      if (dogovor?.id) {
+        refs.dogovorId = String(dogovor.id);
+      } else {
+        missing.push(
+          `договор «${(payload.agreement ?? '').trim() || payload.agreement_guid}» не найден`,
+        );
+      }
     }
   }
 
