@@ -257,9 +257,14 @@ export const buildServiceDocFields = (
   clearIfBlank('date_repair', 'dataRemonta');
   clearIfBlank('payment_type', 'vidOplaty');
   clearIfBlank('cartridges', 'oborudovanie');
-  clearIfBlank('goods', 'sostavRabot');
   clearIfBlank('service_status', 'stadiya');
   clearIfBlank('service_status', 'status');
+
+  // RICH_TEXT нулевым значением не чистится: сервер падает на разборе blocknote
+  // (`transformRichTextValue`), поэтому очищаем пустой проекцией markdown.
+  if (hasKey(payload, 'goods') && isBlank(payload.goods)) {
+    clears.sostavRabot = { markdown: '' };
+  }
 
   // документ распроведён → «Проведен» очищаем
   if (hasKey(payload, 'posted') && !payload.posted) {
