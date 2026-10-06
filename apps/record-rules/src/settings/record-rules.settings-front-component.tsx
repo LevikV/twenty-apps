@@ -5,6 +5,7 @@ import { RECORD_RULES_SETTINGS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/
 import {
   ACTION_LABELS,
   ACTION_ORDER,
+  DEFAULT_FREEZE_MESSAGE,
   DEFAULT_RULE_MESSAGE,
   defaultRecordRulesConfig,
   newRuleId,
@@ -261,10 +262,33 @@ const RecordRulesSettings = () => {
     });
   };
 
+  /** Заморозка: стадии-«замки» (пусто — закрыто всё вне разрешённого набора). */
+  const toggleFreezeValue = (rule: RecordRule, value: string) => {
+    patchRule(rule.id, {
+      freezeValues: rule.freezeValues.includes(value)
+        ? rule.freezeValues.filter((item) => item !== value)
+        : [...rule.freezeValues, value],
+    });
+  };
+
+  /** Заморозка: поля, которые всё же можно править в закрытой стадии. */
+  const toggleFreezeAllowedField = (rule: RecordRule, fieldName: string) => {
+    patchRule(rule.id, {
+      freezeAllowedFields: rule.freezeAllowedFields.includes(fieldName)
+        ? rule.freezeAllowedFields.filter((item) => item !== fieldName)
+        : [...rule.freezeAllowedFields, fieldName],
+    });
+  };
+
   const fieldsOf = (
     objectName: string,
   ): { name: string; label: string; options: RecordRuleFieldOption[] }[] =>
     objects.find((item) => item.nameSingular === objectName)?.fields ?? [];
+
+  const writableFieldsOf = (
+    objectName: string,
+  ): { name: string; label: string }[] =>
+    objects.find((item) => item.nameSingular === objectName)?.writableFields ?? [];
 
   const cycleObject = (rule: RecordRule) => {
     if (objects.length === 0) {
@@ -556,6 +580,126 @@ const RecordRulesSettings = () => {
             <div style={{ opacity: 0.6 }}>
               {'{название}'} подставится значением, которое пытались поставить.
             </div>
+
+            <div
+              style={{
+                borderTop: '1px solid rgba(128, 128, 128, 0.25)',
+                margin: '2px 0',
+              }}
+            />
+
+            <div style={rowStyle}>
+              <span style={labelStyle}>Заморозка</span>
+              <label style={{ ...rowStyle, gap: '6px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={rule.freezeEnabled}
+                  onChange={() =>
+                    patchRule(rule.id, { freezeEnabled: !rule.freezeEnabled })
+                  }
+                />
+                <span>В закрытой стадии запретить правки записи целиком</span>
+              </label>
+            </div>
+            <div style={{ opacity: 0.6 }}>
+              Пока запись в закрытой стадии — менять нельзя ничего, кроме отмеченных
+              полей. Создание записей не затрагивается; API и приложения — по флагу
+              «Применять к служебным изменениям»; администраторы обходят.
+            </div>
+
+            {rule.freezeEnabled ? (
+              <>
+                <div style={{ ...rowStyle, alignItems: 'flex-start' }}>
+                  <span style={labelStyle}>Закрыто</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <div style={{ opacity: 0.6 }}>
+                      {rule.freezeValues.length === 0
+                        ? 'Ничего не отмечено — закрыто всё, чего нет в «Разрешено» (обычный вариант).'
+                        : 'Отмечен только этот набор — остальные стадии открыты для правки.'}
+                    </div>
+                    {field === undefined ? (
+                      <span style={{ opacity: 0.6 }}>сначала выберите поле</span>
+                    ) : (
+                      <div style={{ ...rowStyle, gap: '10px' }}>
+                        {field.options.map((option) => (
+                          <label
+                            key={option.value}
+                            style={{ ...rowStyle, gap: '5px', cursor: 'pointer' }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={rule.freezeValues.includes(option.value)}
+                              onChange={() => toggleFreezeValue(rule, option.value)}
+                            />
+                            <span>{option.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    {rule.freezeValues.length > 0 ? (
+                      <button
+                        type="button"
+                        style={chipStyle}
+                        onClick={() => patchRule(rule.id, { freezeValues: [] })}
+                      >
+                        сбросить — закрыто всё вне набора
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div style={{ ...rowStyle, alignItems: 'flex-start' }}>
+                  <span style={labelStyle}>Можно править</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {writableFieldsOf(rule.objectName).length === 0 ? (
+                      <span style={{ opacity: 0.6 }}>
+                        {rule.objectName.length === 0
+                          ? 'сначала выберите объект'
+                          : 'у объекта нет доступных для правки полей'}
+                      </span>
+                    ) : (
+                      <div style={{ ...rowStyle, gap: '8px' }}>
+                        {writableFieldsOf(rule.objectName).map((writableField) => (
+                          <label
+                            key={writableField.name}
+                            style={{ ...rowStyle, gap: '5px', cursor: 'pointer' }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={rule.freezeAllowedFields.includes(
+                                writableField.name,
+                              )}
+                              onChange={() =>
+                                toggleFreezeAllowedField(rule, writableField.name)
+                              }
+                            />
+                            <span>{writableField.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ opacity: 0.6 }}>
+                      Отмечено: {rule.freezeAllowedFields.length}. Пусто — в закрытой
+                      стадии править нельзя ничего. Системные поля в списке не
+                      показываются.
+                    </div>
+                  </div>
+                </div>
+
+                <div style={rowStyle}>
+                  <span style={labelStyle}>Текст отказа</span>
+                  <input
+                    type="text"
+                    style={inputStyle}
+                    placeholder={DEFAULT_FREEZE_MESSAGE}
+                    value={rule.freezeMessage}
+                    onChange={(event) =>
+                      patchRule(rule.id, { freezeMessage: event.target.value })
+                    }
+                  />
+                </div>
+              </>
+            ) : null}
           </div>
         );
       })}
