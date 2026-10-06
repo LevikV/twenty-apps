@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DEFAULT_FREEZE_MESSAGE,
   defaultRecordRulesConfig,
+  getFreezeMode,
   hasUsableRules,
+  MAX_FREEZE_ALLOWED_FIELDS,
   normalizeRecordRulesConfig,
+  resolveFreezeMessage,
 } from 'src/shared/record-rules';
 
 describe('normalizeRecordRulesConfig', () => {
@@ -56,6 +60,10 @@ describe('normalizeRecordRulesConfig', () => {
       message: 'Мастеру недоступна стадия «{название}»',
       active: true,
       applyToServiceChanges: false,
+      freezeEnabled: true,
+      freezeValues: [],
+      freezeAllowedFields: ['kommentariy'],
+      freezeMessage: '',
     };
 
     const config = normalizeRecordRulesConfig({ rules: [rule] });
@@ -85,6 +93,10 @@ describe('hasUsableRules', () => {
       onlyFromSet: true,
       message: '',
       applyToServiceChanges: false,
+      freezeEnabled: false,
+      freezeValues: [],
+      freezeAllowedFields: [],
+      freezeMessage: '',
     };
 
     expect(
@@ -96,5 +108,110 @@ describe('hasUsableRules', () => {
     expect(
       hasUsableRules({ rules: [{ ...base, allowedValues: ['V_RABOTE'], active: false }] }),
     ).toBe(false);
+  });
+});
+
+describe('заморозка записи (Задача 3)', () => {
+  const normalizeOne = (raw: unknown) => {
+    const config = normalizeRecordRulesConfig({ rules: [raw] });
+
+    expect(config.rules).toHaveLength(1);
+
+    return config.rules[0];
+  };
+
+  it('у старого правила (полей заморозки нет) заморозка выключена', () => {
+    const rule = normalizeOne({
+      objectName: 'remontOborudovaniya',
+      fieldName: 'stadiya',
+      allowedValues: ['V_RABOTE'],
+    });
+
+    expect(rule.freezeEnabled).toBe(false);
+    expect(rule.freezeValues).toEqual([]);
+    expect(rule.freezeAllowedFields).toEqual([]);
+    expect(rule.freezeMessage).toBe('');
+    expect(getFreezeMode(rule)).toBe('OFF');
+  });
+
+  it('пустой freezeValues — закрыто всё, чего нет в разрешённом наборе', () => {
+    const rule = normalizeOne({
+      objectName: 'remontOborudovaniya',
+      fieldName: 'stadiya',
+      allowedValues: ['V_RABOTE'],
+      freezeEnabled: true,
+      freezeValues: [],
+    });
+
+    expect(getFreezeMode(rule)).toBe('OUTSIDE_ALLOWED');
+  });
+
+  it('заполненный freezeValues — отдельный набор стадий-замков', () => {
+    const rule = normalizeOne({
+      objectName: 'remontOborudovaniya',
+      fieldName: 'stadiya',
+      allowedValues: ['V_RABOTE'],
+      freezeEnabled: true,
+      freezeValues: ['VYDAN', ' GOTOVO_K_VYDACHE ', 'VYDAN', ''],
+    });
+
+    expect(rule.freezeValues).toEqual(['VYDAN', 'GOTOVO_K_VYDACHE']);
+    expect(getFreezeMode(rule)).toBe('CUSTOM');
+  });
+
+  it('чистит и ограничивает список полей-исключений', () => {
+    const manyFields = Array.from({ length: 150 }, (_, index) => `pole${index}`);
+
+    const rule = normalizeOne({
+      objectName: 'remontOborudovaniya',
+      fieldName: 'stadiya',
+      allowedValues: ['V_RABOTE'],
+      freezeEnabled: true,
+      freezeAllowedFields: [' kommentariy ', 'kommentariy', '', 42, ...manyFields],
+    });
+
+    expect(rule.freezeAllowedFields[0]).toBe('kommentariy');
+    expect(rule.freezeAllowedFields).toHaveLength(MAX_FREEZE_ALLOWED_FIELDS);
+    expect(rule.freezeAllowedFields).not.toContain('');
+  });
+
+  it('битые значения заморозки не ломают правило', () => {
+    const rule = normalizeOne({
+      objectName: 'remontOborudovaniya',
+      fieldName: 'stadiya',
+      allowedValues: ['V_RABOTE'],
+      freezeEnabled: 'да',
+      freezeValues: 'нет',
+      freezeAllowedFields: { поле: 1 },
+      freezeMessage: 123,
+    });
+
+    expect(rule.freezeEnabled).toBe(false);
+    expect(rule.freezeValues).toEqual([]);
+    expect(rule.freezeAllowedFields).toEqual([]);
+    expect(rule.freezeMessage).toBe('');
+  });
+
+  it('текст отказа: своё значение или текст по умолчанию', () => {
+    const withOwnMessage = normalizeOne({
+      objectName: 'remontOborudovaniya',
+      fieldName: 'stadiya',
+      allowedValues: ['V_RABOTE'],
+      freezeEnabled: true,
+      freezeMessage: 'Ремонт закрыт — правки запрещены',
+    });
+
+    expect(resolveFreezeMessage(withOwnMessage)).toBe(
+      'Ремонт закрыт — правки запрещены',
+    );
+
+    const withoutMessage = normalizeOne({
+      objectName: 'remontOborudovaniya',
+      fieldName: 'stadiya',
+      allowedValues: ['V_RABOTE'],
+      freezeEnabled: true,
+    });
+
+    expect(resolveFreezeMessage(withoutMessage)).toBe(DEFAULT_FREEZE_MESSAGE);
   });
 });

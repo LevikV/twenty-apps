@@ -50,7 +50,38 @@ export type RecordRule = {
   message: string;
   active: boolean;
   applyToServiceChanges: boolean;
+
+  /**
+   * Заморозка записи (Задача 3). Пока запись в «закрытой» стадии, адресованному
+   * пользователю запрещены любые правки записи, кроме полей-исключений.
+   */
+  freezeEnabled: boolean;
+  /** Стадии, в которых запись закрыта. Пусто — «всё, чего нет в `allowedValues`». */
+  freezeValues: string[];
+  /** Поля, которые всё же можно править в закрытой стадии. Пусто — нельзя ничего. */
+  freezeAllowedFields: string[];
+  /** Текст отказа для заморозки. Пусто — `DEFAULT_FREEZE_MESSAGE`. */
+  freezeMessage: string;
 };
+
+/**
+ * Режим заморозки правила:
+ * - `OFF` — выключена;
+ * - `OUTSIDE_ALLOWED` — закрыто всё, чего нет в `allowedValues` (основной вариант);
+ * - `CUSTOM` — закрыт отдельный набор стадий `freezeValues`.
+ */
+export type RecordRuleFreezeMode = 'OFF' | 'OUTSIDE_ALLOWED' | 'CUSTOM';
+
+export const getFreezeMode = (rule: RecordRule): RecordRuleFreezeMode => {
+  if (!rule.freezeEnabled) {
+    return 'OFF';
+  }
+
+  return rule.freezeValues.length > 0 ? 'CUSTOM' : 'OUTSIDE_ALLOWED';
+};
+
+export const resolveFreezeMessage = (rule: RecordRule): string =>
+  rule.freezeMessage.length > 0 ? rule.freezeMessage : DEFAULT_FREEZE_MESSAGE;
 
 export type RecordRulesConfig = {
   rules: RecordRule[];
@@ -62,6 +93,11 @@ export const MAX_MESSAGE_LENGTH = 500;
 
 export const DEFAULT_RULE_MESSAGE =
   'Стадию «{название}» может поставить только менеджер';
+
+export const DEFAULT_FREEZE_MESSAGE =
+  'Запись в стадии «{название}» закрыта для правки';
+
+export const MAX_FREEZE_ALLOWED_FIELDS = 100;
 
 export const defaultRecordRulesConfig = (): RecordRulesConfig => ({ rules: [] });
 
@@ -109,6 +145,9 @@ const asAllowedValues = (value: unknown): string[] => {
   return [...seen];
 };
 
+const asFieldNames = (value: unknown): string[] =>
+  asAllowedValues(value).slice(0, MAX_FREEZE_ALLOWED_FIELDS);
+
 const normalizeRule = (raw: unknown): RecordRule | null => {
   if (typeof raw !== 'object' || raw === null) {
     return null;
@@ -131,6 +170,13 @@ const normalizeRule = (raw: unknown): RecordRule | null => {
     applyToServiceChanges: asBooleanOrDefault(
       candidate.applyToServiceChanges,
       false,
+    ),
+    freezeEnabled: asBooleanOrDefault(candidate.freezeEnabled, false),
+    freezeValues: asAllowedValues(candidate.freezeValues),
+    freezeAllowedFields: asFieldNames(candidate.freezeAllowedFields),
+    freezeMessage: asTrimmedString(candidate.freezeMessage).slice(
+      0,
+      MAX_MESSAGE_LENGTH,
     ),
   };
 };

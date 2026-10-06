@@ -24,11 +24,25 @@ export type RecordRuleSelectableField = {
   options: RecordRuleFieldOption[];
 };
 
+/** Поле, которое можно править записью: для списка исключений (заморозка, Задача 3). */
+export type RecordRuleWritableField = {
+  name: string;
+  label: string;
+};
+
 export type RecordRuleSelectableObject = {
   nameSingular: string;
   labelSingular: string;
   fields: RecordRuleSelectableField[];
+  writableFields: RecordRuleWritableField[];
 };
+
+/**
+ * Типы, которые записью не обновляются вовсе: правило на них бессмысленно.
+ * Системные поля (createdAt/createdBy/updatedAt/updatedBy/id/position/searchVector)
+ * отсекаются по `isSystem` — сервер дописывает их сам, исключением их делать нельзя.
+ */
+const NON_WRITABLE_FIELD_TYPES = new Set(['TS_VECTOR']);
 
 const METADATA_QUERY = `
   query RecordRulesMetadata {
@@ -37,7 +51,7 @@ const METADATA_QUERY = `
         node {
           nameSingular
           labelSingular
-          fieldsList { name label type isActive options }
+          fieldsList { name label type isActive isSystem isUIEditable settings options }
         }
       }
     }
@@ -49,6 +63,9 @@ type RawField = {
   label?: unknown;
   type?: unknown;
   isActive?: unknown;
+  isSystem?: unknown;
+  isUIEditable?: unknown;
+  settings?: unknown;
   options?: unknown;
 };
 
@@ -92,6 +109,44 @@ const toSelectableField = (raw: RawField): RecordRuleSelectableField | null => {
   }
 
   return { name, label, type, options };
+};
+
+/**
+ * Поле для списка исключений заморозки: любое поле, которое вообще можно записать
+ * (кроме системных и связей «один-ко-многим» — они записью не обновляются).
+ */
+const toWritableField = (raw: RawField): RecordRuleWritableField | null => {
+  const type = typeof raw.type === 'string' ? raw.type : '';
+
+  if (
+    raw.isActive === false ||
+    raw.isSystem === true ||
+    raw.isUIEditable === false ||
+    NON_WRITABLE_FIELD_TYPES.has(type)
+  ) {
+    return null;
+  }
+
+  const settings = raw.settings;
+
+  if (
+    typeof settings === 'object' &&
+    settings !== null &&
+    (settings as { relationType?: unknown }).relationType === 'ONE_TO_MANY'
+  ) {
+    return null;
+  }
+
+  const name = typeof raw.name === 'string' ? raw.name : '';
+
+  if (name.length === 0) {
+    return null;
+  }
+
+  return {
+    name,
+    label: typeof raw.label === 'string' && raw.label.length > 0 ? raw.label : name,
+  };
 };
 
 /**
@@ -153,6 +208,12 @@ export const fetchSelectableObjects = async (): Promise<
       continue;
     }
 
+    const writableFields = Array.isArray(node?.fieldsList)
+      ? (node?.fieldsList as RawField[])
+          .map(toWritableField)
+          .filter((field): field is RecordRuleWritableField => field !== null)
+      : [];
+
     objects.push({
       nameSingular,
       labelSingular:
@@ -160,6 +221,7 @@ export const fetchSelectableObjects = async (): Promise<
           ? node.labelSingular
           : nameSingular,
       fields,
+      writableFields,
     });
   }
 

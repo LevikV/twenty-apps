@@ -237,6 +237,10 @@ const RecordRulesSettings = () => {
           message: DEFAULT_RULE_MESSAGE,
           active: true,
           applyToServiceChanges: false,
+          freezeEnabled: false,
+          freezeValues: [],
+          freezeAllowedFields: [],
+          freezeMessage: '',
         },
       ],
     }));
