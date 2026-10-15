@@ -4,13 +4,13 @@ import { defineSettingsFrontComponent } from 'twenty-sdk/define';
 import { PROFIT_SETTINGS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 import {
   BASE_LABELS,
-  BASE_ORDER,
   DIRECTION_LABELS,
   DIRECTION_ORDER,
   ROLE_LABELS,
   ROLE_ORDER,
   UNIT_LABELS,
   UNIT_ORDER,
+  basesForDirection,
   clampByUnit,
   defaultProfitSettings,
   newRuleId,
@@ -528,7 +528,7 @@ const ProfitSettingsScreen = () => {
                         style={chipStyle}
                         onClick={() =>
                           patchRule(direction, rule.id, {
-                            base: nextInOrder(BASE_ORDER, rule.base),
+                            base: nextInOrder(basesForDirection(direction), rule.base),
                           })
                         }
                       >
@@ -659,7 +659,7 @@ const ProfitSettingsScreen = () => {
                     style={chipStyle}
                     onClick={() =>
                       patchPersonal(rule.id, {
-                        base: nextInOrder(BASE_ORDER, rule.base),
+                        base: nextInOrder(basesForDirection(rule.direction), rule.base),
                       })
                     }
                   >

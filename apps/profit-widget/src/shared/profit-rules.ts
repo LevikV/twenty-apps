@@ -22,7 +22,9 @@ export type ProfitBase =
   | 'services'
   | 'goodsProfit'
   | 'materialsSum'
-  | 'fixedPerItem';
+  | 'fixedPerItem'
+  | 'orderProfit'
+  | 'orderProfitUchet';
 
 export type ProfitRole = 'master' | 'otvetstvennyy' | 'priyomshchik';
 
@@ -88,11 +90,33 @@ export const BASE_ORDER: ProfitBase[] = [
   'fixedPerItem',
 ];
 
+/**
+ * Базы направления «Заказы» (согласовано 2026-10-15):
+ *   orderProfit      — прибыль по заказу «от наценки»: сумма − сумма/(1 + наценка/100).
+ *                      Основная база: от неё считается профит ответственного (30 %).
+ *   orderProfitUchet — прибыль по заказу «от фактического учёта»: сумма − стоимость
+ *                      товаров по учётным ценам 1С. Справочная цифра, показывается
+ *                      только тем, у кого «видит всё».
+ */
+export const ORDER_BASES: ProfitBase[] = ['orderProfit', 'orderProfitUchet'];
+
+/** Все существующие базы — для разбора сохранённых настроек. */
+export const ALL_BASES: ProfitBase[] = [...BASE_ORDER, ...ORDER_BASES];
+
+/**
+ * Базы, доступные в настройках для направления: заказам — плюс заказные,
+ * остальным — только общие (заказные базы на ремонте всегда дают 0).
+ */
+export const basesForDirection = (direction: ProfitDirection): ProfitBase[] =>
+  direction === 'zakaz' ? [...BASE_ORDER, ...ORDER_BASES] : BASE_ORDER;
+
 export const BASE_LABELS: Record<ProfitBase, string> = {
   services: 'Сумма услуг',
   goodsProfit: 'Прибыль по товарам (материалам)',
   materialsSum: 'Сумма материалов',
   fixedPerItem: 'Фикс за единицу',
+  orderProfit: 'Прибыль по заказу (от наценки)',
+  orderProfitUchet: 'Прибыль по заказу (от фактического учёта)',
 };
 
 export const UNIT_ORDER: ProfitUnit[] = ['percent', 'rub'];
@@ -199,7 +223,7 @@ export const isDirection = (value: unknown): value is ProfitDirection =>
   typeof value === 'string' && DIRECTION_ORDER.includes(value as ProfitDirection);
 
 export const isBase = (value: unknown): value is ProfitBase =>
-  typeof value === 'string' && BASE_ORDER.includes(value as ProfitBase);
+  typeof value === 'string' && ALL_BASES.includes(value as ProfitBase);
 
 export const isRole = (value: unknown): value is ProfitRole =>
   typeof value === 'string' && ROLE_ORDER.includes(value as ProfitRole);

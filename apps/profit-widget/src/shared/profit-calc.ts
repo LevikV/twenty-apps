@@ -35,6 +35,13 @@ export type ProfitInputs = {
   contractorCost: number;
   /** Единиц товара (для «фикс за единицу»); по умолчанию 1. */
   units: number;
+  /**
+   * Сумма заказа — база для заказных расчётов (`orderProfit`, `orderProfitUchet`).
+   * В заказах «Сумма» = сумма товаров (услуги в расчёт не берутся).
+   */
+  orderTotal?: number;
+  /** Стоимость товаров по учётным ценам 1С — для базы «от фактического учёта». */
+  uchetCost?: number;
   /** Какой сотрудник (sotrudnik id) стоит в записи в каждой роли. */
   roleEmployeeIds: Partial<Record<ProfitRole, string | null>>;
 };
@@ -54,6 +61,12 @@ export type ProfitGroup = {
   total: number;
 };
 
+export type ProfitReference = {
+  /** Строки справочного расчёта («от фактического учёта»). */
+  rows: ProfitRow[];
+  total: number;
+};
+
 export type ProfitBreakdown = {
   /** Строки смотрящего. */
   rows: ProfitRow[];
@@ -62,6 +75,11 @@ export type ProfitBreakdown = {
   total: number;
   /** Есть ли вообще что показывать этому сотруднику. */
   hasProfit: boolean;
+  /**
+   * Справочный расчёт для «видит всё»: те же правила, но база «от фактического учёта»
+   * вместо «от наценки». У остальных — null.
+   */
+  reference: ProfitReference | null;
 };
 
 const safe = (value: number): number =>
@@ -100,6 +118,22 @@ export const baseValue = (
 
     case 'fixedPerItem':
       return safe(inputs.units);
+
+    case 'orderProfit': {
+      const total = safe(inputs.orderTotal ?? 0);
+      const markup = settings.materialsMarkupPercent;
+
+      if (total === 0) {
+        return 0;
+      }
+
+      const purchase = markup > -100 ? total / (1 + markup / 100) : total;
+
+      return Math.max(total - purchase, 0);
+    }
+
+    case 'orderProfitUchet':
+      return Math.max(safe(inputs.orderTotal ?? 0) - safe(inputs.uchetCost ?? 0), 0);
 
     default:
       return 0;
@@ -179,6 +213,46 @@ const sum = (rows: ProfitRow[]): number =>
   rows.reduce((total, row) => total + row.amount, 0);
 
 /**
+ * Какую базу подставлять в справочный расчёт руководителя: «от фактического учёта»
+ * вместо «от наценки». Для баз других направлений подмены нет.
+ */
+const REFERENCE_BASE: Partial<Record<ProfitBase, ProfitBase>> = {
+  orderProfit: 'orderProfitUchet',
+};
+
+/**
+ * Справочные строки для «видит всё»: правила считаются по той же ставке,
+ * но от базы «от фактического учёта». Берутся только заполненные в записи роли.
+ */
+const rowsForReference = (
+  settings: ProfitSettings,
+  direction: ProfitDirection,
+  inputs: ProfitInputs,
+): ProfitRow[] => {
+  const directionSettings = resolveDirection(settings, direction);
+
+  return directionSettings.rules
+    .filter(
+      (rule) =>
+        REFERENCE_BASE[rule.base] !== undefined &&
+        (inputs.roleEmployeeIds[rule.role] ?? null) !== null,
+    )
+    .map((rule) => {
+      const referenceBase = REFERENCE_BASE[rule.base] as ProfitBase;
+      const base = baseValue(referenceBase, inputs, directionSettings);
+
+      return {
+        id: `reference-${rule.id}`,
+        title: `${ROLE_LABELS[rule.role]} · ${BASE_LABELS[referenceBase]}`,
+        rate: formatRate(rule.value, rule.unit),
+        base,
+        amount: amountByRate(rule.value, rule.unit, base),
+      };
+    })
+    .filter((row) => row.amount !== 0);
+};
+
+/**
  * Профит для смотрящего.
  *
  * Если у сотрудника стоит «видит всё» — возвращаем разбивку по ролям записи
@@ -209,8 +283,18 @@ export const calculateProfit = (
       .filter((group) => group.employeeId !== null);
 
     const rows = [...groups.flatMap((group) => group.rows), ...ownPersonal];
+    const referenceRows = rowsForReference(settings, direction, inputs);
 
-    return { rows, groups, total: sum(rows), hasProfit: rows.length > 0 };
+    return {
+      rows,
+      groups,
+      total: sum(rows),
+      hasProfit: rows.length > 0,
+      reference:
+        referenceRows.length > 0
+          ? { rows: referenceRows, total: sum(referenceRows) }
+          : null,
+    };
   }
 
   const rows = viewer.employeeId
@@ -222,5 +306,11 @@ export const calculateProfit = (
       ]
     : ownPersonal;
 
-  return { rows, groups: [], total: sum(rows), hasProfit: rows.length > 0 };
+  return {
+    rows,
+    groups: [],
+    total: sum(rows),
+    hasProfit: rows.length > 0,
+    reference: null,
+  };
 };
