@@ -111,6 +111,8 @@ export const lineAmounts = (payload: ServiceDocPayload) => {
   let mats = 0;
   let worksWithoutDiscount = 0;
   let matsWithoutDiscount = 0;
+  let matsUchet = 0;
+  let hasUchet = false;
 
   for (const good of payload.goods ?? []) {
     const amount = Number(good.amount ?? 0) || 0;
@@ -119,13 +121,25 @@ export const lineAmounts = (payload: ServiceDocPayload) => {
     if (good.kind === 'Запас') {
       mats += amount;
       matsWithoutDiscount += amountWithoutDiscount;
+
+      // Учётная стоимость материалов — только если 1С отдала учётную цену
+      if (good.accounting_price !== undefined && good.accounting_price !== null) {
+        hasUchet = true;
+        matsUchet += (Number(good.accounting_price) || 0) * (Number(good.quantity ?? 0) || 0);
+      }
     } else {
       works += amount;
       worksWithoutDiscount += amountWithoutDiscount;
     }
   }
 
-  return { works, mats, worksWithoutDiscount, matsWithoutDiscount };
+  return {
+    works,
+    mats,
+    worksWithoutDiscount,
+    matsWithoutDiscount,
+    matsUchet: hasUchet ? matsUchet : undefined,
+  };
 };
 
 /** Денежное поле Twenty: пишем amountMicros и валюту. */
@@ -231,7 +245,8 @@ export const buildServiceDocFields = (
     notes.push(`неизвестный вид оплаты 1С: «${paymentType}»`);
   }
 
-  const { works, mats, worksWithoutDiscount, matsWithoutDiscount } = lineAmounts(payload);
+  const { works, mats, worksWithoutDiscount, matsWithoutDiscount, matsUchet } =
+    lineAmounts(payload);
   const sostavRabot = buildSostavRabot(payload);
 
   const discount = Number(payload.discount ?? 0);
@@ -303,6 +318,8 @@ export const buildServiceDocFields = (
       summaBezSkidki: money(worksWithoutDiscount + matsWithoutDiscount),
       stoimostRabot: money(works),
       stoimostMaterialov: money(mats),
+      // учётная стоимость материалов: пишем только если 1С отдала учётные цены
+      stoimostMaterialovUchet: matsUchet === undefined ? undefined : money(matsUchet),
       stoimostPodryadchika: money(contractorCost),
       // поле-процент: Twenty хранит долю (10 % → 0.1)
       skidka: Math.round((discount / 100) * 1_000_000) / 1_000_000,

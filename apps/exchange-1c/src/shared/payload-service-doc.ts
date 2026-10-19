@@ -14,6 +14,8 @@ export type ServiceDocGood = {
   price?: number;
   amount?: number;
   amount_without_discount?: number;
+  /** Учётная цена единицы (1С). Может отсутствовать — тогда учётную стоимость не считаем. */
+  accounting_price?: number;
 };
 
 export type ServiceDocCartridge = {
