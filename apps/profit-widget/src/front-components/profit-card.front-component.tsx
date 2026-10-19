@@ -10,17 +10,31 @@ import {
   type ProfitRow,
 } from 'src/shared/profit-calc';
 import {
+  loadProfitRecord,
+  money,
+  optionalMoney,
+  type RecordSource,
+} from 'src/shared/record-sources';
+import {
+  DIRECTION_LABELS,
+  ROLE_LABELS,
   normalizeProfitSettings,
+  type ProfitRole,
   type ProfitSettings,
 } from 'src/shared/profit-rules';
 
 /**
- * Виджет профита на карточке ремонта оборудования.
+ * Виджет профита в карточке записи — один на все направления.
+ *
+ * Объект определяется по id записи (см. `record-sources.ts`): «Заказ» (opportunities),
+ * «Ремонт оборудования» (remontOborudovaniyas); заправки и тендеры добавляются туда же.
+ * Направление, поля сумм и роли берутся из карты объекта, поэтому новых компонентов
+ * под каждое направление не нужно.
  *
  * Каждый видит только свой профит:
- *   • сотрудник, указанный в записи Мастером или Ответственным, — свои строки;
+ *   • сотрудник, указанный в записи в одной из ролей, — свои строки;
  *   • кому в настройках приложения стоит «видит всё» (руководитель) — разбивку
- *     по ролям записи и итог;
+ *     по ролям записи, итог и справочный расчёт «от фактического учёта»;
  *   • остальным — прочерк.
  *
  * Ничего не хранит: считает из полей карточки и настроек приложения при открытии
@@ -28,28 +42,10 @@ import {
  */
 
 const SETTINGS_PATH = '/profit-settings';
-const MICROS = 1_000_000;
-
-type MemberInfo = {
-  id: string;
-  sotrudnikId: string | null;
-  name: string;
-};
-
-type RepairRecord = {
-  name?: string | null;
-  stoimostRabot?: unknown;
-  stoimostMaterialov?: unknown;
-  stoimostPodryadchika?: unknown;
-  masterId?: string | null;
-  otvetstvennyyId?: string | null;
-  priyomshchikId?: string | null;
-};
 
 type ReadyState = {
   breakdown: ProfitBreakdown;
-  recordName: string;
-  viewerName: string;
+  source: RecordSource;
   seesAll: boolean;
 };
 
@@ -62,18 +58,6 @@ const readEnv = () =>
 
 const describeError = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
-
-/** Деньги из REST: `{ amountMicros, currencyCode }` → рубли. */
-const money = (value: unknown): number => {
-  if (value === null || typeof value !== 'object') {
-    return 0;
-  }
-
-  const micros = (value as { amountMicros?: unknown }).amountMicros;
-  const parsed = typeof micros === 'number' ? micros : Number(String(micros ?? ''));
-
-  return Number.isFinite(parsed) ? parsed / MICROS : 0;
-};
 
 const fullName = (name?: { firstName?: string; lastName?: string } | null) =>
   `${name?.firstName ?? ''} ${name?.lastName ?? ''}`.trim();
@@ -109,7 +93,7 @@ const ProfitCard = () => {
         : {};
 
       if (!recordId) {
-        throw new Error('Не удалось определить запись ремонта');
+        throw new Error('Не удалось определить запись');
       }
 
       if (!userId) {
@@ -118,19 +102,16 @@ const ProfitCard = () => {
 
       // Кэш браузера обходим уникальным параметром `_ts`: мост песочницы не
       // передаёт `cache`, а на 304 отдаёт ответ с пустым телом.
-      const [meResponse, recordResponse, settingsResponse] = await Promise.all([
+      const [meResponse, settingsResponse, loaded] = await Promise.all([
         fetch(
           `${apiBase}/rest/workspaceMembers?filter=${encodeURIComponent(`userId[eq]:${userId}`)}&limit=1&_ts=${Date.now()}`,
           { headers, cache: 'no-store' },
         ),
-        fetch(`${apiBase}/rest/remontOborudovaniyas/${recordId}?_ts=${Date.now()}`, {
-          headers,
-          cache: 'no-store',
-        }),
         fetch(`${functionsBase}${SETTINGS_PATH}?_ts=${Date.now()}`, {
           headers,
           cache: 'no-store',
         }),
+        loadProfitRecord(apiBase, recordId, headers),
       ]);
 
       const meJson = (await meResponse.json()) as {
@@ -142,9 +123,6 @@ const ProfitCard = () => {
           }[];
         };
       };
-      const recordJson = (await recordResponse.json()) as {
-        data?: { remontOborudovaniya?: RepairRecord };
-      };
       const settingsJson = (await settingsResponse.json()) as {
         settings?: unknown;
       };
@@ -155,54 +133,49 @@ const ProfitCard = () => {
         );
       }
 
-      if (!recordResponse.ok) {
-        throw new Error(
-          `не удалось прочитать ремонт (HTTP ${recordResponse.status}) ${JSON.stringify(recordJson).slice(0, 200)}`,
-        );
-      }
-
       if (!settingsResponse.ok) {
         throw new Error(
           `не удалось прочитать настройки профита (HTTP ${settingsResponse.status}) ${JSON.stringify(settingsJson).slice(0, 200)}`,
         );
       }
 
+      const { source, record } = loaded;
       const meRow = meJson.data?.workspaceMembers?.[0];
-      const record = recordJson.data?.remontOborudovaniya;
-
-      if (!record) {
-        throw new Error('Запись ремонта не найдена');
-      }
-
       const settings: ProfitSettings = normalizeProfitSettings(settingsJson.settings);
       const memberId = meRow?.id ?? null;
       const employeeId = meRow?.sotrudnikId ?? null;
       const seesAll = memberId !== null && settings.seesAll.includes(memberId);
 
+      const amountOf = (field: string | null): number =>
+        field ? money(record[field]) : 0;
+      const roleEmployeeIds: Partial<Record<ProfitRole, string | null>> = {};
+
+      (Object.keys(source.roles) as ProfitRole[]).forEach((role) => {
+        const field = source.roles[role] ?? null;
+
+        roleEmployeeIds[role] = field
+          ? ((record[field] as string | null | undefined) ?? null)
+          : null;
+      });
+
       const breakdown = calculateProfit(
         settings,
-        'remont',
+        source.direction,
         {
-          services: money(record.stoimostRabot),
-          materials: money(record.stoimostMaterialov),
-          contractorCost: money(record.stoimostPodryadchika),
+          services: amountOf(source.servicesField),
+          materials: amountOf(source.materialsField),
+          contractorCost: amountOf(source.contractorField),
           units: 1,
-          roleEmployeeIds: {
-            master: record.masterId ?? null,
-            otvetstvennyy: record.otvetstvennyyId ?? null,
-            priyomshchik: record.priyomshchikId ?? null,
-          },
+          materialsUchet: source.materialsUchetField
+            ? optionalMoney(record[source.materialsUchetField])
+            : undefined,
+          roleEmployeeIds,
         },
         { memberId, employeeId, seesAll },
       );
 
       if (isRelevant) {
-        setReady({
-          breakdown,
-          recordName: record.name ?? '',
-          viewerName: meRow ? fullName(meRow.name) : '',
-          seesAll,
-        });
+        setReady({ breakdown, source, seesAll });
         setIsLoading(false);
       }
     };
@@ -259,13 +232,17 @@ const ProfitCard = () => {
   }
 
   if (!ready.breakdown.hasProfit) {
+    // Правила не заданы — только если у направления вообще нет строк ни по одной роли.
+    const rulesMissing =
+      ready.seesAll && ready.breakdown.groups.length === 0 && ready.breakdown.rows.length === 0;
+
     return (
       <div style={boxStyle}>
         <div style={{ fontSize: '15px', fontWeight: 600 }}>Профит: —</div>
         <div style={{ opacity: 0.7 }}>
-          {ready.breakdown.groups.length === 0 && !ready.seesAll
-            ? 'По этой записи профит вам не начисляется.'
-            : 'Правила расчёта для этого направления ещё не заданы.'}
+          {rulesMissing
+            ? `Правила расчёта для направления «${DIRECTION_LABELS[ready.source.direction]}» ещё не заданы.`
+            : 'По этой записи профит вам не начисляется.'}
         </div>
         <button type="button" style={buttonStyle} onClick={refresh}>
           Обновить
@@ -311,8 +288,7 @@ const ProfitCard = () => {
               }}
             >
               <div style={{ fontWeight: 600, opacity: 0.9 }}>
-                {group.role === 'master' ? 'Мастер' : 'Ответственный'} —{' '}
-                {formatMoney(group.total)}
+                {ROLE_LABELS[group.role]} — {formatMoney(group.total)}
               </div>
               {group.rows.map(rowLine)}
             </div>
@@ -324,6 +300,43 @@ const ProfitCard = () => {
         </div>
       )}
 
+      {ready.breakdown.reference ? (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '4px',
+            borderLeft: '2px solid rgba(128, 128, 128, 0.35)',
+            paddingLeft: '8px',
+            opacity: 0.85,
+          }}
+        >
+          <div style={{ fontWeight: 600, opacity: 0.9 }}>
+            Справочно, от фактического учёта —{' '}
+            {formatMoney(ready.breakdown.reference.total)}
+          </div>
+          {ready.breakdown.reference.rows.map((row) => (
+            <div
+              key={row.id}
+              style={{
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: '8px',
+                justifyContent: 'space-between',
+              }}
+            >
+              <span style={{ opacity: 0.85 }}>
+                прибыль {formatMoney(row.base)} · {row.rate}
+              </span>
+              <span style={{ whiteSpace: 'nowrap' }}>{formatMoney(row.amount)}</span>
+            </div>
+          ))}
+          <div style={{ opacity: 0.7 }}>
+            Справочная цифра по учётным ценам из 1С, в профит не входит.
+          </div>
+        </div>
+      ) : null}
+
       <button type="button" style={buttonStyle} onClick={refresh}>
         Обновить
       </button>
@@ -334,6 +347,6 @@ const ProfitCard = () => {
 export default defineFrontComponent({
   universalIdentifier: PROFIT_CARD_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER,
   name: 'profitCard',
-  description: 'Профит мастера и ответственного в карточке ремонта',
+  description: 'Профит сотрудника в карточке записи (ремонт, заказ; дальше — заправки, тендеры)',
   component: ProfitCard,
 });

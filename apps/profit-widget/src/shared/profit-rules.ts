@@ -21,10 +21,9 @@ export type ProfitDirection = 'remont' | 'zapravka' | 'tender' | 'zakaz';
 export type ProfitBase =
   | 'services'
   | 'goodsProfit'
+  | 'goodsProfitUchet'
   | 'materialsSum'
-  | 'fixedPerItem'
-  | 'orderProfit'
-  | 'orderProfitUchet';
+  | 'fixedPerItem';
 
 export type ProfitRole = 'master' | 'otvetstvennyy' | 'priyomshchik';
 
@@ -86,37 +85,28 @@ export const ROLE_LABELS: Record<ProfitRole, string> = {
 export const BASE_ORDER: ProfitBase[] = [
   'services',
   'goodsProfit',
+  'goodsProfitUchet',
   'materialsSum',
   'fixedPerItem',
 ];
 
-/**
- * Базы направления «Заказы» (согласовано 2026-10-15):
- *   orderProfit      — прибыль по заказу «от наценки»: сумма − сумма/(1 + наценка/100).
- *                      Основная база: от неё считается профит ответственного (30 %).
- *   orderProfitUchet — прибыль по заказу «от фактического учёта»: сумма − стоимость
- *                      товаров по учётным ценам 1С. Справочная цифра, показывается
- *                      только тем, у кого «видит всё».
- */
-export const ORDER_BASES: ProfitBase[] = ['orderProfit', 'orderProfitUchet'];
-
 /** Все существующие базы — для разбора сохранённых настроек. */
-export const ALL_BASES: ProfitBase[] = [...BASE_ORDER, ...ORDER_BASES];
+export const ALL_BASES: ProfitBase[] = BASE_ORDER;
 
 /**
- * Базы, доступные в настройках для направления: заказам — плюс заказные,
- * остальным — только общие (заказные базы на ремонте всегда дают 0).
+ * Базы, доступные в настройках для направления. Пока одинаковы для всех
+ * направлений: вторая база по товарам работает везде, где заполнена
+ * учётная стоимость (ремонт, заказы; дальше — заправки и тендеры).
  */
-export const basesForDirection = (direction: ProfitDirection): ProfitBase[] =>
-  direction === 'zakaz' ? [...BASE_ORDER, ...ORDER_BASES] : BASE_ORDER;
+export const basesForDirection = (_direction: ProfitDirection): ProfitBase[] =>
+  BASE_ORDER;
 
 export const BASE_LABELS: Record<ProfitBase, string> = {
   services: 'Сумма услуг',
   goodsProfit: 'Прибыль по товарам (материалам)',
+  goodsProfitUchet: 'Прибыль по товарам (от фактического учёта)',
   materialsSum: 'Сумма материалов',
   fixedPerItem: 'Фикс за единицу',
-  orderProfit: 'Прибыль по заказу (от наценки)',
-  orderProfitUchet: 'Прибыль по заказу (от фактического учёта)',
 };
 
 export const UNIT_ORDER: ProfitUnit[] = ['percent', 'rub'];

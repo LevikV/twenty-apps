@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { calculateProfit, formatMoney } from 'src/shared/profit-calc';
 import {
+  BASE_ORDER,
   basesForDirection,
   defaultProfitSettings,
   normalizeProfitSettings,
@@ -125,56 +126,61 @@ describe('расчёт профита по ремонту', () => {
 });
 
 /**
- * Заказы (согласовано 2026-10-15):
- *   база «от наценки» = сумма − сумма/1,5 (наценка 50 %); профит ответственного — 30 % от неё;
- *   у кого «видит всё» — дополнительно справочная цифра «от фактического учёта» (сумма − учёт).
- * Эталонные заказы — из разведки 15.10.2026 (см. план «Профит по заказам», этап 1).
+ * Товары и товары по учёту (заказы и ремонты — одна логика):
+ *   «Прибыль по товарам (материалам)»    = товары − товары / (1 + наценка/100);
+ *   «Прибыль по товарам (от факт. учёта)» = товары − учётная стоимость товаров;
+ *   профит ответственного — 30 % от базы; у кого «видит всё» вторая цифра показывается
+ *   справочно и в профит не входит. Услуги в заказах в расчёт не участвуют.
  */
-const orderSettings = (): ProfitSettings => {
+const goodsSettings = (direction: 'zakaz' | 'remont'): ProfitSettings => {
   const value = defaultProfitSettings();
 
-  value.directions.zakaz.rules = [
+  value.directions[direction].rules = [
     {
-      id: 'zakaz-otv-profit',
+      id: `${direction}-otv-profit`,
       role: 'otvetstvennyy',
-      base: 'orderProfit',
+      base: 'goodsProfit',
       value: 30,
       unit: 'percent',
     },
   ];
-  value.directions.zakaz.materialsMarkupPercent = 50;
+  value.directions[direction].materialsMarkupPercent = 50;
 
   return value;
 };
 
-const orderInputs = (total: number, uchet: number, employee = 'EMP-DIMOV') => ({
+const goodsInputs = (
+  materials: number,
+  materialsUchet?: number,
+  employee = 'EMP-DIMOV',
+): Parameters<typeof calculateProfit>[2] => ({
   services: 0,
-  materials: 0,
+  materials,
   contractorCost: 0,
   units: 1,
-  orderTotal: total,
-  uchetCost: uchet,
+  materialsUchet,
   roleEmployeeIds: { otvetstvennyy: employee },
 });
 
-describe('расчёт профита по заказам', () => {
-  it('«от наценки» и профит 30 % сходятся с эталоном этапа 1', () => {
+describe('прибыль по товарам — заказы', () => {
+  it('считается от стоимости товаров, а не от суммы заказа', () => {
     const orders = [
-      { name: 'НФФР-000296', total: 8630, uchet: 4446.29, base: 2876.67, profit: 863 },
-      { name: 'НФФР-000289', total: 9064, uchet: 6042.67, base: 3021.33, profit: 906.4 },
-      { name: 'НФФР-000510', total: 21090, uchet: 14800, base: 7030, profit: 2109 },
-      { name: 'НФФР-000034', total: 147200, uchet: 67337.33, base: 49066.67, profit: 14720 },
-      { name: 'НФФР-000143', total: 189000, uchet: 126000, base: 63000, profit: 18900 },
+      { name: 'НФФР-000296', goods: 8630, uchet: 4446.29, base: 2876.67, profit: 863 },
+      { name: 'НФФР-000289', goods: 9064, uchet: 6042.67, base: 3021.33, profit: 906.4 },
+      { name: 'НФФР-000510', goods: 21090, uchet: 14800, base: 7030, profit: 2109 },
+      { name: 'НФФР-000034', goods: 147200, uchet: 67337.33, base: 49066.67, profit: 14720 },
+      { name: 'НФФР-000143', goods: 189000, uchet: 126000, base: 63000, profit: 18900 },
     ];
 
     let totalProfit = 0;
 
     orders.forEach((order) => {
-      const result = calculateProfit(orderSettings(), 'zakaz', orderInputs(order.total, order.uchet), {
-        memberId: 'M-DIMOV',
-        employeeId: 'EMP-DIMOV',
-        seesAll: false,
-      });
+      const result = calculateProfit(
+        goodsSettings('zakaz'),
+        'zakaz',
+        goodsInputs(order.goods, order.uchet),
+        { memberId: 'M-DIMOV', employeeId: 'EMP-DIMOV', seesAll: false },
+      );
 
       expect(result.rows).toHaveLength(1);
       expect(result.rows[0].base).toBeCloseTo(order.base, 2);
@@ -190,68 +196,107 @@ describe('расчёт профита по заказам', () => {
 
   it('«видит всё» дополнительно получает справочный расчёт «от фактического учёта»', () => {
     const result = calculateProfit(
-      orderSettings(),
+      goodsSettings('zakaz'),
       'zakaz',
-      orderInputs(21090, 14800),
+      goodsInputs(21090, 14800),
       { memberId: 'M-BOSS', employeeId: 'EMP-BOSS', seesAll: true },
     );
 
-    // профит ответственного — 30 % от прибыли «от наценки»: 21090/3 = 7030 → 2109
     expect(result.total).toBeCloseTo(2109, 5);
-    expect(result.reference).not.toBeNull();
-    // справочно: 21090 − 14800 = 6290 → 30 % = 1887
     expect(result.reference?.rows[0].base).toBeCloseTo(6290, 5);
     expect(result.reference?.rows[0].amount).toBeCloseTo(1887, 5);
     expect(result.reference?.total).toBeCloseTo(1887, 5);
   });
 
-  it('заказ без ответственного — профита нет и справочной цифры тоже', () => {
+  it('без учётной стоимости справочного блока нет', () => {
     const result = calculateProfit(
-      orderSettings(),
+      goodsSettings('zakaz'),
       'zakaz',
-      { ...orderInputs(21090, 14800), roleEmployeeIds: {} },
+      goodsInputs(21090),
+      { memberId: 'M-BOSS', employeeId: 'EMP-BOSS', seesAll: true },
+    );
+
+    expect(result.total).toBeCloseTo(2109, 5);
+    expect(result.reference).toBeNull();
+  });
+
+  it('запись без ответственного — профита нет', () => {
+    const result = calculateProfit(
+      goodsSettings('zakaz'),
+      'zakaz',
+      { ...goodsInputs(21090, 14800), roleEmployeeIds: {} },
       { memberId: 'M-BOSS', employeeId: 'EMP-BOSS', seesAll: true },
     );
 
     expect(result.groups).toEqual([]);
     expect(result.hasProfit).toBe(false);
-    expect(result.reference).toBeNull();
   });
+});
 
-  it('правила по заказам не срабатывают на ремонте', () => {
+describe('прибыль по товарам — ремонт', () => {
+  it('та же логика: «от наценки» и справочно «от учёта»', () => {
+    const value = goodsSettings('remont');
     const result = calculateProfit(
-      orderSettings(),
+      value,
       'remont',
-      inputs({ orderTotal: 21090, uchetCost: 14800 }),
-      { memberId: 'M-DIMOV', employeeId: 'EMP-SHIP', seesAll: false },
+      {
+        services: 0,
+        materials: 560,
+        contractorCost: 0,
+        units: 1,
+        materialsUchet: 400,
+        roleEmployeeIds: { otvetstvennyy: 'EMP-SHIP' },
+      },
+      { memberId: 'M-SHIP', employeeId: 'EMP-SHIP', seesAll: false },
     );
 
-    expect(result.hasProfit).toBe(false);
-    expect(result.total).toBe(0);
+    // 560 − 560/1,5 = 186,67 → 30 % = 56
+    expect(result.total).toBeCloseTo(56, 2);
+    expect(result.reference).toBeNull(); // у сотрудника справочной цифры нет
   });
 
-  it('базы заказов доступны в настройках только направлению «Заказы» и переживают сохранение', () => {
-    expect(basesForDirection('zakaz')).toEqual([
-      'services',
-      'goodsProfit',
-      'materialsSum',
-      'fixedPerItem',
-      'orderProfit',
-      'orderProfitUchet',
-    ]);
-    expect(basesForDirection('remont')).toEqual([
-      'services',
-      'goodsProfit',
-      'materialsSum',
-      'fixedPerItem',
-    ]);
-
-    const restored = normalizeProfitSettings(
-      JSON.parse(JSON.stringify(orderSettings())) as unknown,
+  it('руководителю по ремонту тоже показывается справочная цифра', () => {
+    const result = calculateProfit(
+      goodsSettings('remont'),
+      'remont',
+      {
+        services: 0,
+        materials: 560,
+        contractorCost: 0,
+        units: 1,
+        materialsUchet: 400,
+        roleEmployeeIds: { otvetstvennyy: 'EMP-SHIP' },
+      },
+      { memberId: 'M-BOSS', employeeId: 'EMP-BOSS', seesAll: true },
     );
 
-    expect(restored.directions.zakaz.rules).toHaveLength(1);
-    expect(restored.directions.zakaz.rules[0].base).toBe('orderProfit');
-    expect(restored.directions.zakaz.rules[0].value).toBe(30);
+    // 560 − 400 = 160 → 30 % = 48
+    expect(result.reference?.rows[0].base).toBeCloseTo(160, 5);
+    expect(result.reference?.rows[0].amount).toBeCloseTo(48, 5);
+  });
+});
+
+describe('модель настроек', () => {
+  it('база «от фактического учёта» доступна всем направлениям', () => {
+    expect(basesForDirection('zakaz')).toEqual(BASE_ORDER);
+    expect(basesForDirection('remont')).toEqual(BASE_ORDER);
+    expect(BASE_ORDER).toContain('goodsProfitUchet');
+  });
+
+  it('правило с новой базой переживает сохранение', () => {
+    const value = goodsSettings('zakaz');
+
+    value.directions.zakaz.rules.push({
+      id: 'zakaz-otv-uchet',
+      role: 'otvetstvennyy',
+      base: 'goodsProfitUchet',
+      value: 10,
+      unit: 'percent',
+    });
+
+    const restored = normalizeProfitSettings(JSON.parse(JSON.stringify(value)) as unknown);
+
+    expect(restored.directions.zakaz.rules).toHaveLength(2);
+    expect(restored.directions.zakaz.rules[1].base).toBe('goodsProfitUchet');
   });
 });

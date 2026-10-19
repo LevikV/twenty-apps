@@ -35,13 +35,8 @@ export type ProfitInputs = {
   contractorCost: number;
   /** Единиц товара (для «фикс за единицу»); по умолчанию 1. */
   units: number;
-  /**
-   * Сумма заказа — база для заказных расчётов (`orderProfit`, `orderProfitUchet`).
-   * В заказах «Сумма» = сумма товаров (услуги в расчёт не берутся).
-   */
-  orderTotal?: number;
-  /** Стоимость товаров по учётным ценам 1С — для базы «от фактического учёта». */
-  uchetCost?: number;
+  /** Стоимость материалов (товаров) по учётным ценам 1С. */
+  materialsUchet?: number;
   /** Какой сотрудник (sotrudnik id) стоит в записи в каждой роли. */
   roleEmployeeIds: Partial<Record<ProfitRole, string | null>>;
 };
@@ -113,27 +108,19 @@ export const baseValue = (
       return Math.max(materials - purchase, 0);
     }
 
+    case 'goodsProfitUchet':
+      // Учётной стоимости нет в записи — база не считается (иначе вышла бы полная стоимость).
+      if (inputs.materialsUchet === undefined) {
+        return 0;
+      }
+
+      return Math.max(safe(inputs.materials) - safe(inputs.materialsUchet), 0);
+
     case 'materialsSum':
       return safe(inputs.materials);
 
     case 'fixedPerItem':
       return safe(inputs.units);
-
-    case 'orderProfit': {
-      const total = safe(inputs.orderTotal ?? 0);
-      const markup = settings.materialsMarkupPercent;
-
-      if (total === 0) {
-        return 0;
-      }
-
-      const purchase = markup > -100 ? total / (1 + markup / 100) : total;
-
-      return Math.max(total - purchase, 0);
-    }
-
-    case 'orderProfitUchet':
-      return Math.max(safe(inputs.orderTotal ?? 0) - safe(inputs.uchetCost ?? 0), 0);
 
     default:
       return 0;
@@ -214,10 +201,11 @@ const sum = (rows: ProfitRow[]): number =>
 
 /**
  * Какую базу подставлять в справочный расчёт руководителя: «от фактического учёта»
- * вместо «от наценки». Для баз других направлений подмены нет.
+ * вместо «от наценки». Работает для любого направления, где заполнена учётная
+ * стоимость товаров (материалов).
  */
 const REFERENCE_BASE: Partial<Record<ProfitBase, ProfitBase>> = {
-  orderProfit: 'orderProfitUchet',
+  goodsProfit: 'goodsProfitUchet',
 };
 
 /**
