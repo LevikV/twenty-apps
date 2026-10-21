@@ -11,6 +11,7 @@ import {
   baseValue,
   calculateProfit,
   companyProfit,
+  companyProfitUchet,
   formatMoney,
   referenceProfit,
   type ProfitInputs,
@@ -142,6 +143,8 @@ type ReportRow = {
   referenceProfit: number;
   /** Сколько остаётся компании после выплат по этой записи. */
   company: number;
+  /** То же, но когда прибыль по товарам считается от фактического учёта. */
+  companyUchet: number;
   inProgress: boolean;
   stage: string;
 };
@@ -155,6 +158,8 @@ type SummaryRow = {
   /** Профит от фактического учёта (справочно). */
   reference: number;
   company: number;
+  /** Остаток компании при расчёте от фактического учёта. */
+  companyUchet: number;
 };
 
 type ReadyState = {
@@ -524,6 +529,7 @@ const ProfitReport = () => {
           const periodValue = record[source.periodField] as string | null | undefined;
           const participantId = inputs.roleEmployeeIds[source.participantRole] ?? null;
           const totalProfit = recordProfit(settings, source, inputs);
+          const refProfit = referenceProfit(settings, source.direction, inputs);
 
           return {
             id: record.id,
@@ -537,8 +543,9 @@ const ProfitReport = () => {
             materials: inputs.materials,
             profitByEmployee,
             totalProfit,
-            referenceProfit: referenceProfit(settings, source.direction, inputs),
+            referenceProfit: refProfit,
             company: companyProfit(settings, source.direction, inputs, totalProfit),
+            companyUchet: companyProfitUchet(settings, source.direction, inputs, refProfit),
             inProgress: record[source.statusField] === 'V_RABOTE',
             stage: (record[source.stageField] as string) ?? '',
           };
@@ -569,6 +576,7 @@ const ProfitReport = () => {
           profit: own.reduce((sum, row) => sum + row.totalProfit, 0),
           reference: own.reduce((sum, row) => sum + row.referenceProfit, 0),
           company: own.reduce((sum, row) => sum + row.company, 0),
+          companyUchet: own.reduce((sum, row) => sum + row.companyUchet, 0),
         };
       });
 
@@ -635,6 +643,7 @@ const ProfitReport = () => {
       profitOf,
       totalProfit,
       companyTotal: visibleRows.reduce((sum, row) => sum + row.company, 0),
+      companyUchetTotal: visibleRows.reduce((sum, row) => sum + row.companyUchet, 0),
       referenceTotal: visibleRows.reduce((sum, row) => sum + row.referenceProfit, 0),
       inProgressCount: inProgress.length,
       inProgressProfit: inProgress.reduce((sum, row) => sum + profitOf(row), 0),
@@ -851,6 +860,9 @@ const ProfitReport = () => {
           company: view.rows
             .filter((item) => item.direction === row.direction)
             .reduce((sum, item) => sum + item.company, 0),
+          companyUchet: view.rows
+            .filter((item) => item.direction === row.direction)
+            .reduce((sum, item) => sum + item.companyUchet, 0),
           reference: view.rows
             .filter((item) => item.direction === row.direction)
             .reduce((sum, item) => sum + item.referenceProfit, 0),
@@ -880,6 +892,9 @@ const ProfitReport = () => {
           <div style={{ opacity: 0.85 }}>
             Остаётся компании: {formatMoney(view.companyTotal)}
           </div>
+          <div style={{ opacity: 0.85 }}>
+            Остаётся компании (от учёта): {formatMoney(view.companyUchetTotal)}
+          </div>
         </>
       )}
       <div style={{ opacity: 0.75 }}>
@@ -904,6 +919,9 @@ const ProfitReport = () => {
                 {ready.seesAll && (
                   <th style={{ ...headCellStyle, textAlign: 'right' }}>Остаётся компании</th>
                 )}
+                {ready.seesAll && (
+                  <th style={{ ...headCellStyle, textAlign: 'right' }}>Остаётся (учёт)</th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -927,6 +945,11 @@ const ProfitReport = () => {
                   {ready.seesAll && (
                     <td style={{ ...cellStyle, textAlign: 'right' }}>
                       {formatMoney(row.company)}
+                    </td>
+                  )}
+                  {ready.seesAll && (
+                    <td style={{ ...cellStyle, textAlign: 'right' }}>
+                      {formatMoney(row.companyUchet)}
                     </td>
                   )}
                 </tr>

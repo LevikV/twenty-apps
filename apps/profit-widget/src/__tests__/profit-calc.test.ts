@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { calculateProfit, companyProfit, formatMoney, referenceProfit } from 'src/shared/profit-calc';
+import {
+  calculateProfit,
+  companyProfit,
+  companyProfitUchet,
+  formatMoney,
+  referenceProfit,
+} from 'src/shared/profit-calc';
 import {
   BASE_ORDER,
   basesForDirection,
@@ -124,6 +130,10 @@ describe('расчёт профита по ремонту', () => {
 
     // база: услуги 2070 + прибыль по товарам 186,67 = 2256,67; выплаты 2126
     expect(companyProfit(settings(), 'remont', inputs(), result.total)).toBeCloseTo(130.67, 1);
+    // от учёта: база 2070 + (560 − 400) = 2230; выплаты от учёта 48
+    expect(
+      companyProfitUchet(settings(), 'remont', inputs({ materialsUchet: 400 }), 48),
+    ).toBeCloseTo(2182, 5);
   });
 
   it('не участник записи — профита нет', () => {

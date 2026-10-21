@@ -242,31 +242,64 @@ const rowsForReference = (
 };
 
 /**
- * Сколько остаётся компании: сумма баз, к которым применяются правила,
- * минус все выплаты сотрудникам.
- *
- * В базу не входят «фикс за единицу» (это не деньги) и «от фактического учёта»
- * (справочная база — альтернатива «от наценки», иначе вышло бы двойное счисление).
+ * База для остатка компании: сумма баз, к которым применяются правила.
+ * При `useUchet` прибыль по товарам считается от учётной стоимости — тогда база
+ * «от учёта» заменяет «от наценки» (а не добавляется к ней).
+ */
+const companyBase = (
+  settings: ProfitSettings,
+  direction: ProfitDirection,
+  inputs: ProfitInputs,
+  useUchet: boolean,
+): number => {
+  const directionSettings = resolveDirection(settings, direction);
+  const bases = new Set(
+    directionSettings.rules
+      .map((rule) => {
+        if (useUchet && rule.base === 'goodsProfit') {
+          return 'goodsProfitUchet' as ProfitBase;
+        }
+
+        return rule.base;
+      })
+      // «фикс за единицу» — не деньги; справочная база «от учёта» не суммируется
+      // с «от наценки», иначе вышло бы двойное счисление.
+      .filter((base) => base !== 'fixedPerItem' && (useUchet || base !== 'goodsProfitUchet')),
+  );
+
+  return [...bases].reduce(
+    (total, base) => total + baseValue(base, inputs, directionSettings),
+    0,
+  );
+};
+
+/**
+ * Сколько остаётся компании: база минус все выплаты сотрудникам.
  */
 export const companyProfit = (
   settings: ProfitSettings,
   direction: ProfitDirection,
   inputs: ProfitInputs,
   payouts: number,
-): number => {
-  const directionSettings = resolveDirection(settings, direction);
-  const bases = new Set(
-    directionSettings.rules
-      .map((rule) => rule.base)
-      .filter((base) => base !== 'fixedPerItem' && base !== 'goodsProfitUchet'),
-  );
-  const totalBase = [...bases].reduce(
-    (total, base) => total + baseValue(base, inputs, directionSettings),
+): number =>
+  Math.max(
+    companyBase(settings, direction, inputs, false) -
+      (Number.isFinite(payouts) ? payouts : 0),
     0,
   );
 
-  return Math.max(totalBase - (Number.isFinite(payouts) ? payouts : 0), 0);
-};
+/** То же, но когда прибыль по товарам считается от фактического учёта. */
+export const companyProfitUchet = (
+  settings: ProfitSettings,
+  direction: ProfitDirection,
+  inputs: ProfitInputs,
+  payouts: number,
+): number =>
+  Math.max(
+    companyBase(settings, direction, inputs, true) -
+      (Number.isFinite(payouts) ? payouts : 0),
+    0,
+  );
 
 /**
  * Профит «от фактического учёта»: те же правила, но база «от учёта» вместо

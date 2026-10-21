@@ -6,7 +6,9 @@ import { PROFIT_CARD_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/
 import {
   calculateProfit,
   companyProfit,
+  companyProfitUchet,
   formatMoney,
+  referenceProfit,
   type ProfitBreakdown,
   type ProfitInputs,
   type ProfitRow,
@@ -51,6 +53,8 @@ type ReadyState = {
   seesAll: boolean;
   /** Сколько остаётся компании после выплат (только для «видит всё»). */
   company: number;
+  /** То же, но когда прибыль по товарам считается от фактического учёта. */
+  companyUchet: number;
 };
 
 const readEnv = () =>
@@ -179,12 +183,20 @@ const ProfitCard = () => {
         seesAll,
       });
 
+      const referenceTotal = referenceProfit(settings, source.direction, inputs);
+
       if (isRelevant) {
         setReady({
           breakdown,
           source,
           seesAll,
           company: companyProfit(settings, source.direction, inputs, breakdown.total),
+          companyUchet: companyProfitUchet(
+            settings,
+            source.direction,
+            inputs,
+            referenceTotal,
+          ),
         });
         setIsLoading(false);
       }
@@ -285,9 +297,14 @@ const ProfitCard = () => {
       </div>
 
       {ready.seesAll && (
-        <div style={{ opacity: 0.85 }}>
-          Остаётся компании: {formatMoney(ready.company)}
-        </div>
+        <>
+          <div style={{ opacity: 0.85 }}>
+            Остаётся компании: {formatMoney(ready.company)}
+          </div>
+          <div style={{ opacity: 0.85 }}>
+            Остаётся компании (от учёта): {formatMoney(ready.companyUchet)}
+          </div>
+        </>
       )}
 
       {ready.breakdown.groups.length > 0 ? (
