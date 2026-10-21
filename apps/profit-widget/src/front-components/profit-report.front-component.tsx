@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { defineFrontComponent } from 'twenty-sdk/define';
-import { useUserId } from 'twenty-sdk/front-component';
+import {
+  openSidePanelPage,
+  SidePanelPages,
+  useUserId,
+} from 'twenty-sdk/front-component';
 
 import { PROFIT_REPORT_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 import {
@@ -119,6 +123,8 @@ type ProfitRecord = Record<string, unknown> & { id: string };
 
 type ReportRow = {
   id: string;
+  /** Имя объекта в единственном числе — для открытия записи в боковой панели. */
+  objectName: string;
   direction: ProfitDirection;
   day: string;
   sortKey: string;
@@ -511,6 +517,7 @@ const ProfitReport = () => {
 
           return {
             id: record.id,
+            objectName: source.recordKey,
             direction: source.direction,
             day: periodValue ? dateKey(Date.parse(periodValue)) : '—',
             sortKey: periodValue ?? '',
@@ -903,7 +910,17 @@ const ProfitReport = () => {
                 const profit = view.profitOf(row);
 
                 return (
-                  <tr key={row.id}>
+                  <tr
+                    key={row.id}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => {
+                      void openSidePanelPage({
+                        page: SidePanelPages.ViewRecord,
+                        recordId: row.id,
+                        objectNameSingular: row.objectName,
+                      });
+                    }}
+                  >
                     <td style={cellStyle}>{row.day}</td>
                     <td style={cellStyle}>{row.name}</td>
                     <td style={cellStyle}>{row.participant || '—'}</td>
