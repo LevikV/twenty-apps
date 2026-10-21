@@ -5,8 +5,10 @@ import { useSelectedRecordIds, useUserId } from 'twenty-sdk/front-component';
 import { PROFIT_CARD_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 import {
   calculateProfit,
+  companyProfit,
   formatMoney,
   type ProfitBreakdown,
+  type ProfitInputs,
   type ProfitRow,
 } from 'src/shared/profit-calc';
 import {
@@ -47,6 +49,8 @@ type ReadyState = {
   breakdown: ProfitBreakdown;
   source: RecordSource;
   seesAll: boolean;
+  /** Сколько остаётся компании после выплат (только для «видит всё»). */
+  company: number;
 };
 
 const readEnv = () =>
@@ -158,24 +162,30 @@ const ProfitCard = () => {
           : null;
       });
 
-      const breakdown = calculateProfit(
-        settings,
-        source.direction,
-        {
-          services: amountOf(source.servicesField),
-          materials: amountOf(source.materialsField),
-          contractorCost: amountOf(source.contractorField),
-          units: 1,
-          materialsUchet: source.materialsUchetField
-            ? optionalMoney(record[source.materialsUchetField])
-            : undefined,
-          roleEmployeeIds,
-        },
-        { memberId, employeeId, seesAll },
-      );
+      const inputs: ProfitInputs = {
+        services: amountOf(source.servicesField),
+        materials: amountOf(source.materialsField),
+        contractorCost: amountOf(source.contractorField),
+        units: 1,
+        materialsUchet: source.materialsUchetField
+          ? optionalMoney(record[source.materialsUchetField])
+          : undefined,
+        roleEmployeeIds,
+      };
+
+      const breakdown = calculateProfit(settings, source.direction, inputs, {
+        memberId,
+        employeeId,
+        seesAll,
+      });
 
       if (isRelevant) {
-        setReady({ breakdown, source, seesAll });
+        setReady({
+          breakdown,
+          source,
+          seesAll,
+          company: companyProfit(settings, source.direction, inputs, breakdown.total),
+        });
         setIsLoading(false);
       }
     };
@@ -273,6 +283,12 @@ const ProfitCard = () => {
       <div style={{ fontSize: '15px', fontWeight: 600 }}>
         Профит: {formatMoney(ready.breakdown.total)}
       </div>
+
+      {ready.seesAll && (
+        <div style={{ opacity: 0.85 }}>
+          Остаётся компании: {formatMoney(ready.company)}
+        </div>
+      )}
 
       {ready.breakdown.groups.length > 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>

@@ -242,6 +242,33 @@ const rowsForReference = (
 };
 
 /**
+ * Сколько остаётся компании: сумма баз, к которым применяются правила,
+ * минус все выплаты сотрудникам.
+ *
+ * В базу не входят «фикс за единицу» (это не деньги) и «от фактического учёта»
+ * (справочная база — альтернатива «от наценки», иначе вышло бы двойное счисление).
+ */
+export const companyProfit = (
+  settings: ProfitSettings,
+  direction: ProfitDirection,
+  inputs: ProfitInputs,
+  payouts: number,
+): number => {
+  const directionSettings = resolveDirection(settings, direction);
+  const bases = new Set(
+    directionSettings.rules
+      .map((rule) => rule.base)
+      .filter((base) => base !== 'fixedPerItem' && base !== 'goodsProfitUchet'),
+  );
+  const totalBase = [...bases].reduce(
+    (total, base) => total + baseValue(base, inputs, directionSettings),
+    0,
+  );
+
+  return Math.max(totalBase - (Number.isFinite(payouts) ? payouts : 0), 0);
+};
+
+/**
  * Профит для смотрящего.
  *
  * Если у сотрудника стоит «видит всё» — возвращаем разбивку по ролям записи

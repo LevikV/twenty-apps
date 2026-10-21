@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { calculateProfit, formatMoney } from 'src/shared/profit-calc';
+import { calculateProfit, companyProfit, formatMoney } from 'src/shared/profit-calc';
 import {
   BASE_ORDER,
   basesForDirection,
@@ -106,6 +106,17 @@ describe('расчёт профита по ремонту', () => {
     // 5 % от 2070 = 103,5; 5 % от (560 − 560/1,5) = 5 % от 186,67 = 9,33
     expect(result.groups[2].total).toBeCloseTo(112.83, 1);
     expect(result.total).toBeCloseTo(2238.83, 1);
+  });
+
+  it('компании остаётся база минус все выплаты', () => {
+    const result = calculateProfit(settings(), 'remont', inputs(), {
+      memberId: 'M-BOSS',
+      employeeId: 'EMP-BOSS',
+      seesAll: true,
+    });
+
+    // база: услуги 2070 + прибыль по товарам 186,67 = 2256,67; выплаты 2126
+    expect(companyProfit(settings(), 'remont', inputs(), result.total)).toBeCloseTo(130.67, 1);
   });
 
   it('не участник записи — профита нет', () => {
