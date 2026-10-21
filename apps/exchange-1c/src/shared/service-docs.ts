@@ -122,11 +122,13 @@ export const lineAmounts = (payload: ServiceDocPayload) => {
       mats += amount;
       matsWithoutDiscount += amountWithoutDiscount;
 
-      // Учётная стоимость материалов — только если 1С отдала учётную цену
-      if (good.accounting_price !== undefined && good.accounting_price !== null) {
-        hasUchet = true;
-        matsUchet += (Number(good.accounting_price) || 0) * (Number(good.quantity ?? 0) || 0);
-      }
+      // Учётная стоимость материалов: учётная цена 1С, при нуле/отсутствии — цена / 1,5
+      // (та же конвенция, что в загрузчике заказов, чтобы расчёт был единым).
+      hasUchet = true;
+      const accountingPrice = Number(good.accounting_price ?? 0) || 0;
+      const unitCost =
+        accountingPrice > 0 ? accountingPrice : (Number(good.price ?? 0) || 0) / 1.5;
+      matsUchet += unitCost * (Number(good.quantity ?? 0) || 0);
     } else {
       works += amount;
       worksWithoutDiscount += amountWithoutDiscount;
