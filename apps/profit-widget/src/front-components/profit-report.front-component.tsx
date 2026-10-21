@@ -11,34 +11,41 @@ import {
 } from 'src/shared/profit-calc';
 import {
   normalizeProfitSettings,
+  type ProfitDirection,
   type ProfitRole,
   type ProfitSettings,
   type ProfitUnit,
 } from 'src/shared/profit-rules';
+import {
+  RECORD_SOURCES,
+  sourceByDirection,
+  type RecordSource,
+} from 'src/shared/record-sources';
 
 /**
- * Отчёт «Профит по ремонтам» — виджет дашборда.
+ * Отчёт «Профит» — виджет дашборда.
  *
- * Этап 2 (04.10.2026): фильтры — период (пресеты + произвольный «с/по»), стадия, сотрудник.
- * Границы суток и месяца считаются по UTC+10 (Биробиджан).
+ * Универсальный: направление выбирается в самом отчёте — Заказы / Ремонты / Все.
+ * Поля каждого направления (базы расчёта, дата периода, стадия, участник) описаны
+ * в карте `record-sources.ts`, поэтому подключение заправок и тендеров — одна запись
+ * в карте, компонент не меняется.
  *
- * Кто что видит:
- *   • обычный сотрудник — свой профит и только те ремонты, где он участник;
- *   • кому в настройках стоит «видит всё» (руководитель) — выбор сотрудника
- *     (по умолчанию «Все сотрудники»); в колонке «Профит» — либо сумма по ремонту,
- *     либо профит выбранного сотрудника.
+ * Поведение:
+ *   • «Заказы» / «Ремонты» — итог в шапке и список записей;
+ *   • «Все» — сводка по направлениям (в одну таблицу их не свести: разные поля
+ *     и разная дата периода);
+ *   • период — пресеты + произвольный «с/по», границы суток по UTC+10 (Биробиджан);
+ *   • обычный сотрудник видит свой профит и только свои записи;
+ *   • кому в настройках стоит «видит всё» — выбор сотрудника и профит по записи целиком.
  *
  * Считается тем же модулем `profit-calc`, что и виджет карточки, поэтому цифры сходятся.
  */
 
 const SETTINGS_PATH = '/profit-settings';
-const MICROS = 1_000_000;
-/** Биробиджан, UTC+10 — границы суток и месяца считаем по поясу Алексея. */
 const SHIFT_MS = 10 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PAGE_LIMIT = 200;
 const MAX_PAGES = 6;
-const ROLES: ProfitRole[] = ['master', 'otvetstvennyy', 'priyomshchik'];
 
 type PeriodPreset = 'today' | 'yesterday' | 'week' | 'month' | 'prevMonth';
 
@@ -50,38 +57,51 @@ const PRESET_LABELS: Record<PeriodPreset, string> = {
   prevMonth: 'Прошлый месяц',
 };
 
-/** Стадии «Ремонта оборудования» — значения и подписи из метаданных CRM. */
-const STAGES: { value: string; label: string }[] = [
-  { value: 'NA_PRIEMKE', label: 'На приемке' },
-  { value: 'V_OCHEREDI', label: 'В очереди' },
-  { value: 'V_RABOTE', label: 'В работе' },
-  { value: 'TREBUET_SOGLASOVANIYA_S_ZAKAZCHIKOM', label: 'Требует согласования с заказчиком' },
-  { value: 'OZHIDAET_RESHENIYA_ZAKAZCHIKA', label: 'Ожидает решения заказчика' },
-  { value: 'OZHIDANIE_PREDOPLATY', label: 'Ожидание предоплаты' },
-  { value: 'POISK_DETALEY', label: 'Поиск деталей' },
-  { value: 'OZHIDAET_DETALEY', label: 'Ожидает деталей' },
-  { value: 'TREBUET_OTKLIKA_GOTOVO', label: 'Требует отклика (готово)' },
-  { value: 'GOTOVO_K_VYDACHE', label: 'Готово к выдаче' },
-  { value: 'VYDAN', label: 'Выдан' },
-  { value: 'ZABRAT', label: 'Забрать' },
-  { value: 'NA_PROVERKE', label: 'На проверке' },
-  { value: 'TREBUET_OTKLIKA_ADMINISTRATORA', label: 'Требует отклика администратора' },
-  { value: 'TREBUET_OTKLIKA_MASTERA', label: 'Требует отклика мастера' },
-  { value: 'TREBUET_OTKLIKA_MENEDZHERA', label: 'Требует отклика менеджера' },
+/** Ключ «все направления» — сводка. Остальные ключи совпадают с направлением профита. */
+type EntityKey = 'all' | ProfitDirection;
+
+const ENTITY_CHIPS: { key: EntityKey; label: string }[] = [
+  { key: 'all', label: 'Все' },
+  ...RECORD_SOURCES.map((source) => ({
+    key: source.direction as EntityKey,
+    label: source.label,
+  })),
 ];
 
-type RepairRecord = {
-  id: string;
-  name?: string | null;
-  proveden?: string | null;
-  status?: string | null;
-  stadiya?: string | null;
-  stoimostRabot?: unknown;
-  stoimostMaterialov?: unknown;
-  stoimostPodryadchika?: unknown;
-  masterId?: string | null;
-  otvetstvennyyId?: string | null;
-  priyomshchikId?: string | null;
+/** Как называется колонка базовой стоимости у направления. */
+const BASE_COLUMN_LABELS: Partial<Record<ProfitDirection, string>> = {
+  zakaz: 'Товары',
+  remont: 'Материалы',
+  zapravka: 'Товары',
+  tender: 'Товары',
+};
+
+/** Подпись записей в шапке. */
+const ROW_LABELS: Partial<Record<ProfitDirection, [string, string, string]>> = {
+  zakaz: ['заказ', 'заказа', 'заказов'],
+  remont: ['ремонт', 'ремонта', 'ремонтов'],
+  zapravka: ['заправка', 'заправки', 'заправок'],
+  tender: ['тендер', 'тендера', 'тендеров'],
+};
+
+/** Склонение: 1 заказ, 2 заказа, 5 заказов. */
+const plural = (count: number, forms: [string, string, string]): string => {
+  const tail = count % 100;
+
+  if (tail >= 11 && tail <= 14) {
+    return forms[2];
+  }
+
+  switch (count % 10) {
+    case 1:
+      return forms[0];
+    case 2:
+    case 3:
+    case 4:
+      return forms[1];
+    default:
+      return forms[2];
+  }
 };
 
 type PersonName = { firstName?: string; lastName?: string } | null;
@@ -95,24 +115,36 @@ type MemberInfo = {
 
 type Employee = { id: string; name: string };
 
+type ProfitRecord = Record<string, unknown> & { id: string };
+
 type ReportRow = {
   id: string;
+  direction: ProfitDirection;
   day: string;
   sortKey: string;
   name: string;
-  master: string;
+  participant: string;
   services: number;
   materials: number;
   /** Профит по каждому сотруднику записи: employeeId → сумма. */
   profitByEmployee: Record<string, number>;
-  /** Профит по ремонту целиком (все роли). */
+  /** Профит по записи целиком (все роли). */
   totalProfit: number;
   inProgress: boolean;
   stage: string;
 };
 
+type SummaryRow = {
+  direction: ProfitDirection;
+  label: string;
+  count: number;
+  base: number;
+  profit: number;
+};
+
 type ReadyState = {
   rows: ReportRow[];
+  summary: SummaryRow[];
   periodLabel: string;
   viewerEmployeeId: string | null;
   viewerName: string;
@@ -138,7 +170,22 @@ const money = (value: unknown): number => {
   const micros = (value as { amountMicros?: unknown }).amountMicros;
   const parsed = typeof micros === 'number' ? micros : Number(String(micros ?? ''));
 
-  return Number.isFinite(parsed) ? parsed / MICROS : 0;
+  return Number.isFinite(parsed) ? parsed / 1_000_000 : 0;
+};
+
+/** Необязательная сумма: пусто → undefined (учётной стоимости нет). */
+const optionalMoney = (value: unknown): number | undefined => {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+
+  const micros = (value as { amountMicros?: unknown }).amountMicros;
+
+  if (micros === null || micros === undefined) {
+    return undefined;
+  }
+
+  return money(value);
 };
 
 /** ФИО из FULL_NAME: сначала фамилия, потом имя (как в списках CRM). */
@@ -216,26 +263,41 @@ const periodLabelOf = (from: string, to: string): string => {
   return `${humanDate(from)} — ${humanDate(to)}`;
 };
 
-const inputsOf = (record: RepairRecord): ProfitInputs => ({
-  services: money(record.stoimostRabot),
-  materials: money(record.stoimostMaterialov),
-  contractorCost: money(record.stoimostPodryadchika),
-  units: 1,
-  roleEmployeeIds: {
-    master: record.masterId ?? null,
-    otvetstvennyy: record.otvetstvennyyId ?? null,
-    priyomshchik: record.priyomshchikId ?? null,
-  },
-});
+/** Входы расчёта из записи по карте объекта. */
+const inputsOf = (source: RecordSource, record: ProfitRecord): ProfitInputs => {
+  const roleEmployeeIds: Partial<Record<ProfitRole, string | null>> = {};
+
+  for (const [role, field] of Object.entries(source.roles)) {
+    if (field) {
+      roleEmployeeIds[role as ProfitRole] = (record[field] as string | null) ?? null;
+    }
+  }
+
+  return {
+    services: source.servicesField ? money(record[source.servicesField]) : 0,
+    materials: source.materialsField ? money(record[source.materialsField]) : 0,
+    contractorCost: source.contractorField ? money(record[source.contractorField]) : 0,
+    units: 1,
+    materialsUchet: source.materialsUchetField
+      ? optionalMoney(record[source.materialsUchetField])
+      : undefined,
+    roleEmployeeIds,
+  };
+};
 
 const amountOf = (value: number, unit: ProfitUnit, base: number): number =>
   unit === 'percent' ? (base * value) / 100 : value;
 
-/** Профит по ремонту целиком: правила направления по трём ролям записи. */
-const recordProfit = (settings: ProfitSettings, inputs: ProfitInputs): number => {
-  const direction = settings.directions.remont;
+/** Профит по записи целиком: правила направления по всем ролям записи. */
+const recordProfit = (
+  settings: ProfitSettings,
+  source: RecordSource,
+  inputs: ProfitInputs,
+): number => {
+  const direction = settings.directions[source.direction];
+  const roles = Object.keys(source.roles) as ProfitRole[];
 
-  return ROLES.reduce((total, role) => {
+  return roles.reduce((total, role) => {
     if (!inputs.roleEmployeeIds[role]) {
       return total;
     }
@@ -245,8 +307,7 @@ const recordProfit = (settings: ProfitSettings, inputs: ProfitInputs): number =>
     return (
       total +
       rows.reduce(
-        (sum, rule) =>
-          sum + amountOf(rule.value, rule.unit, baseValue(rule.base, inputs, direction)),
+        (sum, rule) => sum + amountOf(rule.value, rule.unit, baseValue(rule.base, inputs, direction)),
         0,
       )
     );
@@ -259,6 +320,7 @@ const ProfitReport = () => {
   const todayKey = dateKey(now.getTime());
   const defaultPeriod = periodForPreset('month', todayKey);
 
+  const [entity, setEntity] = useState<EntityKey>('all');
   const [preset, setPreset] = useState<PeriodPreset | null>('month');
   const [from, setFrom] = useState(defaultPeriod.from);
   const [to, setTo] = useState(defaultPeriod.to);
@@ -271,8 +333,18 @@ const ProfitReport = () => {
   const [ready, setReady] = useState<ReadyState | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
 
+  const activeSource = entity === 'all' ? undefined : sourceByDirection(entity);
+  const stages = activeSource?.stages ?? [];
+
   const refresh = useCallback(() => {
     setRefreshToken((current) => current + 1);
+  }, []);
+
+  const pickEntity = useCallback((next: EntityKey) => {
+    setEntity(next);
+    // Стадии у направлений разные — старый фильтр не должен «залипнуть».
+    setStage('');
+    setEmployeeId('all');
   }, []);
 
   const applyPreset = useCallback(
@@ -351,37 +423,6 @@ const ProfitReport = () => {
         );
       }
 
-      const repairFilter = `proveden[gte]:${dayStartIso(from)},proveden[lte]:${dayEndIso(to)}`;
-      const repairs: RepairRecord[] = [];
-      let cursor: string | null = null;
-
-      for (let page = 0; page < MAX_PAGES; page += 1) {
-        const url =
-          `${apiBase}/rest/remontOborudovaniyas?filter=${encodeURIComponent(repairFilter)}` +
-          `&order_by=${encodeURIComponent('proveden[AscNullsFirst]')}` +
-          `&limit=${PAGE_LIMIT}&_ts=${stamp}` +
-          (cursor ? `&starting_after=${encodeURIComponent(cursor)}` : '');
-
-        const response = await fetch(url, { headers, cache: 'no-store' });
-
-        if (!response.ok) {
-          throw new Error(`не удалось прочитать ремонты (HTTP ${response.status})`);
-        }
-
-        const json = (await response.json()) as {
-          data?: { remontOborudovaniyas?: RepairRecord[] };
-          pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
-        };
-
-        repairs.push(...(json.data?.remontOborudovaniyas ?? []));
-
-        if (!json.pageInfo?.hasNextPage || !json.pageInfo.endCursor) {
-          break;
-        }
-
-        cursor = json.pageInfo.endCursor;
-      }
-
       const settings: ProfitSettings = normalizeProfitSettings(settingsJson.settings);
       const members = membersJson.data?.workspaceMembers ?? [];
       const me = members.find((item) => item.userId === userId);
@@ -400,45 +441,110 @@ const ProfitReport = () => {
       // Персональные правила приложения привязаны к участнику воркспейса,
       // поэтому для каждого сотрудника берём его memberId (если учётка есть).
       const profitFor = (
+        direction: ProfitDirection,
         inputs: ProfitInputs,
         employee: string,
       ): number =>
-        calculateProfit(settings, 'remont', inputs, {
+        calculateProfit(settings, direction, inputs, {
           memberId: memberByEmployee.get(employee) ?? null,
           employeeId: employee,
           seesAll: false,
         }).total;
 
-      const rows: ReportRow[] = repairs
-        .map((record) => {
-          const inputs = inputsOf(record);
-          const profitByEmployee: Record<string, number> = {};
+      /** Читает записи одного направления за период и превращает их в строки отчёта. */
+      const loadRows = async (source: RecordSource): Promise<ReportRow[]> => {
+        const filter = `${source.periodField}[gte]:${dayStartIso(from)},${source.periodField}[lte]:${dayEndIso(to)}`;
+        const records: ProfitRecord[] = [];
+        let cursor: string | null = null;
 
-          for (const role of ROLES) {
+        for (let page = 0; page < MAX_PAGES; page += 1) {
+          const url =
+            `${apiBase}/rest/${source.endpoint}?filter=${encodeURIComponent(filter)}` +
+            `&order_by=${encodeURIComponent(`${source.periodField}[AscNullsFirst]`)}` +
+            `&limit=${PAGE_LIMIT}&_ts=${stamp}` +
+            (cursor ? `&starting_after=${encodeURIComponent(cursor)}` : '');
+
+          const response = await fetch(url, { headers, cache: 'no-store' });
+
+          if (!response.ok) {
+            throw new Error(
+              `не удалось прочитать «${source.label}» (HTTP ${response.status})`,
+            );
+          }
+
+          const json = (await response.json()) as {
+            data?: Record<string, ProfitRecord[] | undefined>;
+            pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+          };
+
+          records.push(...(json.data?.[source.endpoint] ?? []));
+
+          if (!json.pageInfo?.hasNextPage || !json.pageInfo.endCursor) {
+            break;
+          }
+
+          cursor = json.pageInfo.endCursor;
+        }
+
+        return records.map((record) => {
+          const inputs = inputsOf(source, record);
+          const profitByEmployee: Record<string, number> = {};
+          const roles = Object.keys(source.roles) as ProfitRole[];
+
+          for (const role of roles) {
             const employee = inputs.roleEmployeeIds[role];
 
             if (!employee) {
               continue;
             }
 
-            profitByEmployee[employee] = profitFor(inputs, employee);
+            profitByEmployee[employee] = profitFor(source.direction, inputs, employee);
           }
+
+          const periodValue = record[source.periodField] as string | null | undefined;
+          const participantId = inputs.roleEmployeeIds[source.participantRole] ?? null;
 
           return {
             id: record.id,
-            day: record.proveden ? dateKey(Date.parse(record.proveden)) : '—',
-            sortKey: record.proveden ?? '',
-            name: record.name ?? '',
-            master: record.masterId ? (namesById.get(record.masterId) ?? '') : '',
+            direction: source.direction,
+            day: periodValue ? dateKey(Date.parse(periodValue)) : '—',
+            sortKey: periodValue ?? '',
+            name: (record.name as string) ?? '',
+            participant: participantId ? (namesById.get(participantId) ?? '') : '',
             services: inputs.services,
             materials: inputs.materials,
             profitByEmployee,
-            totalProfit: recordProfit(settings, inputs),
-            inProgress: record.status === 'V_RABOTE',
-            stage: record.stadiya ?? '',
+            totalProfit: recordProfit(settings, source, inputs),
+            inProgress: record[source.statusField] === 'V_RABOTE',
+            stage: (record[source.stageField] as string) ?? '',
           };
-        })
-        .sort((first, second) => second.sortKey.localeCompare(first.sortKey));
+        });
+      };
+
+      const sources =
+        entity === 'all'
+          ? RECORD_SOURCES
+          : [sourceByDirection(entity)].filter((item): item is RecordSource => Boolean(item));
+
+      const rows: ReportRow[] = [];
+
+      for (const source of sources) {
+        rows.push(...(await loadRows(source)));
+      }
+
+      rows.sort((first, second) => second.sortKey.localeCompare(first.sortKey));
+
+      const summary: SummaryRow[] = sources.map((source) => {
+        const own = rows.filter((row) => row.direction === source.direction);
+
+        return {
+          direction: source.direction,
+          label: source.label,
+          count: own.length,
+          base: own.reduce((sum, row) => sum + row.materials, 0),
+          profit: own.reduce((sum, row) => sum + row.totalProfit, 0),
+        };
+      });
 
       const employeeList: Employee[] = [...namesById.entries()]
         .map(([id, name]) => ({ id, name: name || 'Без ФИО' }))
@@ -448,6 +554,7 @@ const ProfitReport = () => {
         setEmployees(employeeList);
         setReady({
           rows,
+          summary,
           periodLabel: periodLabelOf(from, to),
           viewerEmployeeId,
           viewerName: me ? fullName(me.name) : '',
@@ -468,7 +575,7 @@ const ProfitReport = () => {
     return () => {
       isRelevant = false;
     };
-  }, [userId, refreshToken, from, to]);
+  }, [userId, refreshToken, from, to, entity]);
 
   /** Чей профит показываем: у «видит всё» — выбранный (или все), у остальных — свой. */
   const scope = ready
@@ -588,6 +695,20 @@ const ProfitReport = () => {
   const filtersBlock = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+        <span style={{ opacity: 0.7 }}>Считаем:</span>
+        {ENTITY_CHIPS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            style={chipStyle(entity === item.key)}
+            onClick={() => pickEntity(item.key)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
         <span style={{ opacity: 0.7 }}>Период:</span>
         {(Object.keys(PRESET_LABELS) as PeriodPreset[]).map((item) => (
           <button
@@ -621,19 +742,23 @@ const ProfitReport = () => {
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-        <span style={{ opacity: 0.7 }}>Стадия:</span>
-        <select
-          style={selectStyle}
-          value={stage}
-          onChange={(event) => setStage(event.target.value)}
-        >
-          <option value="">Все стадии</option>
-          {STAGES.map((item) => (
-            <option key={item.value} value={item.value}>
-              {item.label}
-            </option>
-          ))}
-        </select>
+        {stages.length > 0 && (
+          <>
+            <span style={{ opacity: 0.7 }}>Стадия:</span>
+            <select
+              style={selectStyle}
+              value={stage}
+              onChange={(event) => setStage(event.target.value)}
+            >
+              <option value="">Все стадии</option>
+              {stages.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
 
         {ready?.seesAll && (
           <>
@@ -677,6 +802,35 @@ const ProfitReport = () => {
     );
   }
 
+  const entityLabel =
+    entity === 'all'
+      ? 'все направления'
+      : (sourceByDirection(entity)?.label ?? '').toLowerCase();
+
+  const countLabel =
+    entity === 'all'
+      ? `${view.rows.length} записей`
+      : `${view.rows.length} ${plural(
+          view.rows.length,
+          ROW_LABELS[entity] ?? ['запись', 'записи', 'записей'],
+        )}`;
+
+  const summaryRows: SummaryRow[] =
+    entity === 'all'
+      ? ready.summary.map((row) => ({
+          ...row,
+          count: view.rows.filter((item) => item.direction === row.direction).length,
+          profit:
+            scope === 'all'
+              ? view.rows
+                  .filter((item) => item.direction === row.direction)
+                  .reduce((sum, item) => sum + item.totalProfit, 0)
+              : view.rows
+                  .filter((item) => item.direction === row.direction)
+                  .reduce((sum, item) => sum + (item.profitByEmployee[scope] ?? 0), 0),
+        }))
+      : [];
+
   return (
     <div style={boxStyle}>
       {filtersBlock}
@@ -685,14 +839,43 @@ const ProfitReport = () => {
         Профит: {formatMoney(view.totalProfit)}
       </div>
       <div style={{ opacity: 0.75 }}>
-        {ready.periodLabel} · {scopeLabel} · ремонтов: {view.rows.length}
+        {ready.periodLabel} · {scopeLabel} · {entityLabel} · {countLabel}
         {view.inProgressCount > 0
           ? ` · в работе: ${view.inProgressCount} на ${formatMoney(view.inProgressProfit)}`
           : ''}
       </div>
 
-      {view.rows.length === 0 ? (
-        <div style={{ opacity: 0.75 }}>За выбранный период ремонтов с профитом нет.</div>
+      {entity === 'all' ? (
+        <div style={{ marginTop: '4px' }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '12px' }}>
+            <thead>
+              <tr>
+                <th style={headCellStyle}>Направление</th>
+                <th style={{ ...headCellStyle, textAlign: 'right' }}>Записей</th>
+                <th style={{ ...headCellStyle, textAlign: 'right' }}>Товары/материалы</th>
+                <th style={{ ...headCellStyle, textAlign: 'right' }}>Профит</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summaryRows.map((row) => (
+                <tr
+                  key={row.direction}
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => pickEntity(row.direction)}
+                >
+                  <td style={cellStyle}>{row.label}</td>
+                  <td style={{ ...cellStyle, textAlign: 'right' }}>{row.count}</td>
+                  <td style={{ ...cellStyle, textAlign: 'right' }}>{formatMoney(row.base)}</td>
+                  <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 600 }}>
+                    {row.profit === 0 ? '—' : formatMoney(row.profit)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : view.rows.length === 0 ? (
+        <div style={{ opacity: 0.75 }}>За выбранный период записей с профитом нет.</div>
       ) : (
         <div style={{ maxHeight: '340px', overflowY: 'auto', marginTop: '4px' }}>
           <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '12px' }}>
@@ -700,9 +883,13 @@ const ProfitReport = () => {
               <tr>
                 <th style={headCellStyle}>Дата</th>
                 <th style={headCellStyle}>№</th>
-                <th style={headCellStyle}>Мастер</th>
-                <th style={{ ...headCellStyle, textAlign: 'right' }}>Услуги</th>
-                <th style={{ ...headCellStyle, textAlign: 'right' }}>Материалы</th>
+                <th style={headCellStyle}>{activeSource?.participantLabel ?? 'Участник'}</th>
+                {activeSource?.servicesField && (
+                  <th style={{ ...headCellStyle, textAlign: 'right' }}>Услуги</th>
+                )}
+                <th style={{ ...headCellStyle, textAlign: 'right' }}>
+                  {BASE_COLUMN_LABELS[entity] ?? 'База'}
+                </th>
                 <th style={{ ...headCellStyle, textAlign: 'right' }}>Профит</th>
               </tr>
             </thead>
@@ -714,10 +901,12 @@ const ProfitReport = () => {
                   <tr key={row.id}>
                     <td style={cellStyle}>{row.day}</td>
                     <td style={cellStyle}>{row.name}</td>
-                    <td style={cellStyle}>{row.master || '—'}</td>
-                    <td style={{ ...cellStyle, textAlign: 'right' }}>
-                      {formatMoney(row.services)}
-                    </td>
+                    <td style={cellStyle}>{row.participant || '—'}</td>
+                    {activeSource?.servicesField && (
+                      <td style={{ ...cellStyle, textAlign: 'right' }}>
+                        {formatMoney(row.services)}
+                      </td>
+                    )}
                     <td style={{ ...cellStyle, textAlign: 'right' }}>
                       {formatMoney(row.materials)}
                     </td>
@@ -742,6 +931,6 @@ const ProfitReport = () => {
 export default defineFrontComponent({
   universalIdentifier: PROFIT_REPORT_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER,
   name: 'profitReport',
-  description: 'Отчёт «Профит по ремонтам» за период — виджет дашборда',
+  description: 'Отчёт «Профит» за период — виджет дашборда (заказы, ремонты и другие направления)',
   component: ProfitReport,
 });
