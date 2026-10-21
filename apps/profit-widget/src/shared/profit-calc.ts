@@ -15,6 +15,7 @@
 import {
   BASE_LABELS,
   ROLE_LABELS,
+  ROLE_ORDER,
   UNIT_LABELS,
   personalRulesOf,
   resolveDirection,
@@ -257,18 +258,19 @@ export const calculateProfit = (
     : [];
 
   if (viewer.seesAll) {
-    const groups = (['master', 'otvetstvennyy'] as ProfitRole[])
-      .map((role) => {
-        const rows = rowsForRole(settings, direction, inputs, role);
+    // Роли берём из общего порядка (мастер, ответственный, приёмщик):
+    // раньше список был зашит как master + otvetstvennyy, и правила приёмщика
+    // не попадали ни в разбивку, ни в итог.
+    const groups = ROLE_ORDER.map((role) => {
+      const rows = rowsForRole(settings, direction, inputs, role);
 
-        return {
-          role,
-          employeeId: inputs.roleEmployeeIds[role] ?? null,
-          rows,
-          total: sum(rows),
-        };
-      })
-      .filter((group) => group.employeeId !== null);
+      return {
+        role,
+        employeeId: inputs.roleEmployeeIds[role] ?? null,
+        rows,
+        total: sum(rows),
+      };
+    }).filter((group) => group.employeeId !== null && group.rows.length > 0);
 
     const rows = [...groups.flatMap((group) => group.rows), ...ownPersonal];
     const referenceRows = rowsForReference(settings, direction, inputs);

@@ -84,6 +84,30 @@ describe('расчёт профита по ремонту', () => {
     expect(result.total).toBeCloseTo(2126, 5);
   });
 
+  it('«видит всё» видит и правила приёмщика (роли не теряются)', () => {
+    const value = settings();
+    value.directions.remont.rules = [
+      ...remontStarterRules(),
+      { id: 'p-services', role: 'priyomshchik', base: 'services', value: 5, unit: 'percent' },
+      { id: 'p-goods', role: 'priyomshchik', base: 'goodsProfit', value: 5, unit: 'percent' },
+    ];
+
+    const result = calculateProfit(value, 'remont', inputs(), {
+      memberId: 'M-BOSS',
+      employeeId: 'EMP-BOSS',
+      seesAll: true,
+    });
+
+    expect(result.groups.map((group) => group.role)).toEqual([
+      'master',
+      'otvetstvennyy',
+      'priyomshchik',
+    ]);
+    // 5 % от 2070 = 103,5; 5 % от (560 − 560/1,5) = 5 % от 186,67 = 9,33
+    expect(result.groups[2].total).toBeCloseTo(112.83, 1);
+    expect(result.total).toBeCloseTo(2238.83, 1);
+  });
+
   it('не участник записи — профита нет', () => {
     const result = calculateProfit(settings(), 'remont', inputs(), {
       memberId: 'M-OTHER',
