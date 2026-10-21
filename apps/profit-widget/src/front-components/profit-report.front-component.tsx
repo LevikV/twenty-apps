@@ -10,6 +10,7 @@ import { PROFIT_REPORT_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constant
 import {
   baseValue,
   calculateProfit,
+  companyProfit,
   formatMoney,
   type ProfitInputs,
 } from 'src/shared/profit-calc';
@@ -136,6 +137,8 @@ type ReportRow = {
   profitByEmployee: Record<string, number>;
   /** Профит по записи целиком (все роли). */
   totalProfit: number;
+  /** Сколько остаётся компании после выплат по этой записи. */
+  company: number;
   inProgress: boolean;
   stage: string;
 };
@@ -146,6 +149,7 @@ type SummaryRow = {
   count: number;
   base: number;
   profit: number;
+  company: number;
 };
 
 type ReadyState = {
@@ -514,6 +518,7 @@ const ProfitReport = () => {
 
           const periodValue = record[source.periodField] as string | null | undefined;
           const participantId = inputs.roleEmployeeIds[source.participantRole] ?? null;
+          const totalProfit = recordProfit(settings, source, inputs);
 
           return {
             id: record.id,
@@ -526,7 +531,8 @@ const ProfitReport = () => {
             services: inputs.services,
             materials: inputs.materials,
             profitByEmployee,
-            totalProfit: recordProfit(settings, source, inputs),
+            totalProfit,
+            company: companyProfit(settings, source.direction, inputs, totalProfit),
             inProgress: record[source.statusField] === 'V_RABOTE',
             stage: (record[source.stageField] as string) ?? '',
           };
@@ -555,6 +561,7 @@ const ProfitReport = () => {
           count: own.length,
           base: own.reduce((sum, row) => sum + row.materials, 0),
           profit: own.reduce((sum, row) => sum + row.totalProfit, 0),
+          company: own.reduce((sum, row) => sum + row.company, 0),
         };
       });
 
@@ -620,6 +627,7 @@ const ProfitReport = () => {
       rows: visibleRows,
       profitOf,
       totalProfit,
+      companyTotal: visibleRows.reduce((sum, row) => sum + row.company, 0),
       inProgressCount: inProgress.length,
       inProgressProfit: inProgress.reduce((sum, row) => sum + profitOf(row), 0),
     };
@@ -832,6 +840,9 @@ const ProfitReport = () => {
       ? ready.summary.map((row) => ({
           ...row,
           count: view.rows.filter((item) => item.direction === row.direction).length,
+          company: view.rows
+            .filter((item) => item.direction === row.direction)
+            .reduce((sum, item) => sum + item.company, 0),
           profit:
             scope === 'all'
               ? view.rows
@@ -850,6 +861,11 @@ const ProfitReport = () => {
       <div style={{ fontSize: '16px', fontWeight: 600 }}>
         Профит: {formatMoney(view.totalProfit)}
       </div>
+      {ready.seesAll && (
+        <div style={{ opacity: 0.85 }}>
+          Остаётся компании: {formatMoney(view.companyTotal)}
+        </div>
+      )}
       <div style={{ opacity: 0.75 }}>
         {ready.periodLabel} · {scopeLabel} · {entityLabel} · {countLabel}
         {view.inProgressCount > 0
@@ -866,6 +882,9 @@ const ProfitReport = () => {
                 <th style={{ ...headCellStyle, textAlign: 'right' }}>Записей</th>
                 <th style={{ ...headCellStyle, textAlign: 'right' }}>Товары/материалы</th>
                 <th style={{ ...headCellStyle, textAlign: 'right' }}>Профит</th>
+                {ready.seesAll && (
+                  <th style={{ ...headCellStyle, textAlign: 'right' }}>Остаётся компании</th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -881,6 +900,11 @@ const ProfitReport = () => {
                   <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 600 }}>
                     {row.profit === 0 ? '—' : formatMoney(row.profit)}
                   </td>
+                  {ready.seesAll && (
+                    <td style={{ ...cellStyle, textAlign: 'right' }}>
+                      {formatMoney(row.company)}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
