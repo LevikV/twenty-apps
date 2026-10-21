@@ -52,7 +52,7 @@ type PeriodPreset = 'today' | 'yesterday' | 'week' | 'month' | 'prevMonth';
 const PRESET_LABELS: Record<PeriodPreset, string> = {
   today: 'Сегодня',
   yesterday: 'Вчера',
-  week: '7 дней',
+  week: 'Эта неделя',
   month: 'Этот месяц',
   prevMonth: 'Прошлый месяц',
 };
@@ -224,8 +224,13 @@ const periodForPreset = (
 
       return { from: yesterday, to: yesterday };
     }
-    case 'week':
-      return { from: shiftKey(todayKey, -6), to: todayKey };
+    case 'week': {
+      // «Эта неделя» — календарная: с понедельника текущей недели по сегодня.
+      const dayOfWeek = new Date(`${todayKey}T00:00:00Z`).getUTCDay();
+      const offset = (dayOfWeek + 6) % 7;
+
+      return { from: shiftKey(todayKey, -offset), to: todayKey };
+    }
     case 'prevMonth': {
       const [yearStr, monthStr] = todayKey.split('-');
       const year = Number(yearStr);
