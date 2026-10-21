@@ -269,6 +269,32 @@ export const companyProfit = (
 };
 
 /**
+ * Профит «от фактического учёта»: те же правила, но база «от учёта» вместо
+ * «от наценки». Правила на других базах (услуги, фикс за единицу) считаются
+ * как обычно — учётная стоимость к ним не применяется.
+ */
+export const referenceProfit = (
+  settings: ProfitSettings,
+  direction: ProfitDirection,
+  inputs: ProfitInputs,
+): number => {
+  const directionSettings = resolveDirection(settings, direction);
+
+  return directionSettings.rules
+    .filter(
+      (rule) =>
+        REFERENCE_BASE[rule.base] !== undefined &&
+        (inputs.roleEmployeeIds[rule.role] ?? null) !== null,
+    )
+    .reduce((total, rule) => {
+      const referenceBase = REFERENCE_BASE[rule.base] as ProfitBase;
+      const base = baseValue(referenceBase, inputs, directionSettings);
+
+      return total + amountByRate(rule.value, rule.unit, base);
+    }, 0);
+};
+
+/**
  * Профит для смотрящего.
  *
  * Если у сотрудника стоит «видит всё» — возвращаем разбивку по ролям записи

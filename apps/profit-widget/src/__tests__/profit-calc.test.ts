@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { calculateProfit, companyProfit, formatMoney } from 'src/shared/profit-calc';
+import { calculateProfit, companyProfit, formatMoney, referenceProfit } from 'src/shared/profit-calc';
 import {
   BASE_ORDER,
   basesForDirection,
@@ -106,6 +106,13 @@ describe('расчёт профита по ремонту', () => {
     // 5 % от 2070 = 103,5; 5 % от (560 − 560/1,5) = 5 % от 186,67 = 9,33
     expect(result.groups[2].total).toBeCloseTo(112.83, 1);
     expect(result.total).toBeCloseTo(2238.83, 1);
+  });
+
+  it('профит от фактического учёта считается от базы «от учёта»', () => {
+    // ответственный 30 % от (560 − 400) = 48; правила на услугах не затрагиваются
+    expect(referenceProfit(settings(), 'remont', inputs({ materialsUchet: 400 }))).toBeCloseTo(48, 5);
+    // учётной стоимости нет — база не считается
+    expect(referenceProfit(settings(), 'remont', inputs())).toBe(0);
   });
 
   it('компании остаётся база минус все выплаты', () => {

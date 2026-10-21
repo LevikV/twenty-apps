@@ -12,6 +12,7 @@ import {
   calculateProfit,
   companyProfit,
   formatMoney,
+  referenceProfit,
   type ProfitInputs,
 } from 'src/shared/profit-calc';
 import {
@@ -137,6 +138,8 @@ type ReportRow = {
   profitByEmployee: Record<string, number>;
   /** Профит по записи целиком (все роли). */
   totalProfit: number;
+  /** Тот же профит, но от базы «фактический учёт» (справочно, только для «видит всё»). */
+  referenceProfit: number;
   /** Сколько остаётся компании после выплат по этой записи. */
   company: number;
   inProgress: boolean;
@@ -149,6 +152,8 @@ type SummaryRow = {
   count: number;
   base: number;
   profit: number;
+  /** Профит от фактического учёта (справочно). */
+  reference: number;
   company: number;
 };
 
@@ -532,6 +537,7 @@ const ProfitReport = () => {
             materials: inputs.materials,
             profitByEmployee,
             totalProfit,
+            referenceProfit: referenceProfit(settings, source.direction, inputs),
             company: companyProfit(settings, source.direction, inputs, totalProfit),
             inProgress: record[source.statusField] === 'V_RABOTE',
             stage: (record[source.stageField] as string) ?? '',
@@ -561,6 +567,7 @@ const ProfitReport = () => {
           count: own.length,
           base: own.reduce((sum, row) => sum + row.materials, 0),
           profit: own.reduce((sum, row) => sum + row.totalProfit, 0),
+          reference: own.reduce((sum, row) => sum + row.referenceProfit, 0),
           company: own.reduce((sum, row) => sum + row.company, 0),
         };
       });
@@ -628,6 +635,7 @@ const ProfitReport = () => {
       profitOf,
       totalProfit,
       companyTotal: visibleRows.reduce((sum, row) => sum + row.company, 0),
+      referenceTotal: visibleRows.reduce((sum, row) => sum + row.referenceProfit, 0),
       inProgressCount: inProgress.length,
       inProgressProfit: inProgress.reduce((sum, row) => sum + profitOf(row), 0),
     };
@@ -843,6 +851,9 @@ const ProfitReport = () => {
           company: view.rows
             .filter((item) => item.direction === row.direction)
             .reduce((sum, item) => sum + item.company, 0),
+          reference: view.rows
+            .filter((item) => item.direction === row.direction)
+            .reduce((sum, item) => sum + item.referenceProfit, 0),
           profit:
             scope === 'all'
               ? view.rows
@@ -862,9 +873,14 @@ const ProfitReport = () => {
         Профит: {formatMoney(view.totalProfit)}
       </div>
       {ready.seesAll && (
-        <div style={{ opacity: 0.85 }}>
-          Остаётся компании: {formatMoney(view.companyTotal)}
-        </div>
+        <>
+          <div style={{ opacity: 0.85 }}>
+            Профит от фактического учёта: {formatMoney(view.referenceTotal)}
+          </div>
+          <div style={{ opacity: 0.85 }}>
+            Остаётся компании: {formatMoney(view.companyTotal)}
+          </div>
+        </>
       )}
       <div style={{ opacity: 0.75 }}>
         {ready.periodLabel} · {scopeLabel} · {entityLabel} · {countLabel}
@@ -883,6 +899,9 @@ const ProfitReport = () => {
                 <th style={{ ...headCellStyle, textAlign: 'right' }}>Товары/материалы</th>
                 <th style={{ ...headCellStyle, textAlign: 'right' }}>Профит</th>
                 {ready.seesAll && (
+                  <th style={{ ...headCellStyle, textAlign: 'right' }}>Профит (учёт)</th>
+                )}
+                {ready.seesAll && (
                   <th style={{ ...headCellStyle, textAlign: 'right' }}>Остаётся компании</th>
                 )}
               </tr>
@@ -900,6 +919,11 @@ const ProfitReport = () => {
                   <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 600 }}>
                     {row.profit === 0 ? '—' : formatMoney(row.profit)}
                   </td>
+                  {ready.seesAll && (
+                    <td style={{ ...cellStyle, textAlign: 'right' }}>
+                      {formatMoney(row.reference)}
+                    </td>
+                  )}
                   {ready.seesAll && (
                     <td style={{ ...cellStyle, textAlign: 'right' }}>
                       {formatMoney(row.company)}
@@ -927,6 +951,9 @@ const ProfitReport = () => {
                   {BASE_COLUMN_LABELS[entity] ?? 'База'}
                 </th>
                 <th style={{ ...headCellStyle, textAlign: 'right' }}>Профит</th>
+                {ready.seesAll && (
+                  <th style={{ ...headCellStyle, textAlign: 'right' }}>Профит (учёт)</th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -959,6 +986,11 @@ const ProfitReport = () => {
                     <td style={{ ...cellStyle, textAlign: 'right', fontWeight: 600 }}>
                       {profit === 0 ? '—' : formatMoney(profit)}
                     </td>
+                    {ready.seesAll && (
+                      <td style={{ ...cellStyle, textAlign: 'right' }}>
+                        {row.referenceProfit === 0 ? '—' : formatMoney(row.referenceProfit)}
+                      </td>
+                    )}
                   </tr>
                 );
               })}
