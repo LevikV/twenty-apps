@@ -49,6 +49,12 @@ import {
   type ServiceDocRefs,
 } from 'src/shared/service-docs';
 import type { ServiceDocPayload } from 'src/shared/payload-service-doc';
+import {
+  buildOrderFields,
+  diffOrderFields,
+  type OrderPayload,
+  type OrderRefs,
+} from 'src/shared/orders';
 
 export type ProcessOutcome = {
   status: 'done' | 'error' | 'pending';
@@ -62,10 +68,10 @@ const DONE: ProcessOutcome = { status: 'done' };
 const pending = (note: string): ProcessOutcome => ({ status: 'pending', note });
 
 /**
- * Сколько раз задача может ждать договор по умолчанию, прежде чем закрыться с пометкой.
- * В обычном обмене договор приходит в той же порции и подтягивается сразу, лимит — страховка.
+ * Сколько раз задача может ждать данных (договор по умолчанию, ссылки заказа),
+ * прежде чем закрыться с пометкой. Обычно всё приходит в той же порции — лимит страховка.
  */
-const CONTRACT_WAIT_ATTEMPTS = 10;
+const WAIT_ATTEMPTS = 10;
 
 type OwnerRef = { kind: 'company' | 'person'; id: string; name?: string };
 
@@ -79,9 +85,9 @@ const findDogovorByGuid = async (guid: string) =>
     | (Record<string, unknown> & { id: string })
     | undefined;
 
-/** Договор ещё не в CRM: ждём его с повтором, но не бесконечно. */
-const waitForContract = (note: string, attempts: number): ProcessOutcome => {
-  if (attempts >= CONTRACT_WAIT_ATTEMPTS) {
+/** Данных ещё нет в CRM: ждём с повтором, но не бесконечно. */
+const waitForData = (note: string, attempts: number): ProcessOutcome => {
+  if (attempts >= WAIT_ATTEMPTS) {
     return {
       status: 'done',
       note: `${note} — ссылка не проставлена (попыток: ${attempts})`,
@@ -284,7 +290,7 @@ const processCompany = async (
     );
 
     if (link.status === 'waiting') {
-      return waitForContract(link.note, attempts);
+      return waitForData(link.note, attempts);
     }
   }
 
@@ -513,7 +519,7 @@ const processPerson = async (input: PersonInput): Promise<ProcessOutcome> => {
     );
 
     if (link.status === 'waiting') {
-      return waitForContract(link.note, input.attempts ?? 0);
+      return waitForData(link.note, input.attempts ?? 0);
     }
   }
 
@@ -887,6 +893,156 @@ const processServiceDoc = async (task: QueueTask): Promise<ProcessOutcome> => {
   return { status: 'done', note: allNotes.length ? allNotes.join('; ') : undefined };
 };
 
+const ORDER_PLURAL = 'opportunities';
+const ORDER_SINGULAR = 'opportunity';
+
+/** «Заказ» 1С по guid — нативный объект `opportunity`. */
+const findOrderByGuid = async (guid: string) =>
+  (await findFirst(ORDER_PLURAL, ORDER_SINGULAR, `guid[eq]:${guid}`)) as
+    | (Record<string, unknown> & { id: string })
+    | undefined;
+
+/**
+ * Заказ покупателя (`objectType = "ЗаказПокупателя"`) → «Заказ / Заказы».
+ * Маппинг и правила — как в разовой загрузке `load_orders.py`; удаление — как у ДС:
+ * карточка не удаляется, а помечается «Активен» = нет.
+ */
+const processOrder = async (
+  payload: OrderPayload,
+  attempts = 0,
+): Promise<ProcessOutcome> => {
+  const existing = await findOrderByGuid(payload.guid);
+
+  if (payload.deleted === true) {
+    if (!existing?.id) {
+      return {
+        status: 'done',
+        note: 'заказ на удаление не найден в CRM — удалять нечего',
+      };
+    }
+
+    if (existing.aktiven === false) {
+      return DONE;
+    }
+
+    await updateOne(ORDER_PLURAL, ORDER_SINGULAR, String(existing.id), {
+      aktiven: false,
+    });
+
+    return { status: 'done', note: 'заказ помечен неактивным («Активен» = нет)' };
+  }
+
+  const refs: OrderRefs = {};
+  const missing: string[] = [];
+  const notes: string[] = [];
+
+  // Покупатель (морф-связь: компания или человек)
+  const buyerGuid = String(payload.counterparty_guid ?? '').trim();
+
+  if (buyerGuid) {
+    const company = await findCompanyByGuid(buyerGuid);
+    const byReestr = company?.id ? null : await findPersonByReestr(buyerGuid);
+    const person =
+      company?.id || byReestr?.personId
+        ? null
+        : await findPersonByObjectGuid(buyerGuid);
+
+    if (company?.id) {
+      refs.pokupatelCompanyId = String(company.id);
+    } else if (byReestr?.personId) {
+      refs.pokupatelPersonId = byReestr.personId;
+    } else if (person?.id) {
+      refs.pokupatelPersonId = String(person.id);
+    } else {
+      missing.push(
+        `покупатель «${(payload.counterparty ?? '').trim() || buyerGuid}» не найден в CRM`,
+      );
+    }
+  }
+
+  // Контактное лицо — только по гуиду (тексты из шапки и доставки не используем)
+  const contactGuid = String(payload.contact_person_guid ?? '').trim();
+
+  if (contactGuid) {
+    const byReestr = await findPersonByReestr(contactGuid);
+    const person = byReestr?.personId
+      ? null
+      : await findPersonByObjectGuid(contactGuid);
+
+    if (byReestr?.personId) {
+      refs.pointOfContactId = byReestr.personId;
+    } else if (person?.id) {
+      refs.pointOfContactId = String(person.id);
+    } else if (contactGuid === buyerGuid) {
+      notes.push(
+        'контактное лицо = сам покупатель (организация) — поле оставлено пустым',
+      );
+    } else {
+      missing.push(
+        `контактное лицо «${(payload.contact_person ?? '').trim() || contactGuid}» не найдено`,
+      );
+    }
+  }
+
+  // Договор
+  const agreementGuid = String(payload.agreement_guid ?? '').trim();
+
+  if (agreementGuid) {
+    const dogovor = await findDogovorByGuid(agreementGuid);
+
+    if (dogovor?.id) {
+      refs.dogovorId = String(dogovor.id);
+    } else {
+      missing.push(
+        `договор «${(payload.agreement ?? '').trim() || agreementGuid}» не найден`,
+      );
+    }
+  }
+
+  // Ответственный
+  const responsibleGuid = String(payload.responsible_guid ?? '').trim();
+
+  if (responsibleGuid) {
+    const sotrudnik = await findSotrudnikByGuid(responsibleGuid);
+
+    if (sotrudnik?.id) {
+      refs.otvetstvennyyId = String(sotrudnik.id);
+    } else {
+      missing.push(
+        `ответственный (guid ${responsibleGuid}) не найден в «Сотрудниках»`,
+      );
+    }
+  } else {
+    notes.push('ответственный не заполнен в 1С');
+  }
+
+  // Ссылки могут прийти в той же порции — возвращаем задачу на повтор
+  if (missing.length) {
+    return waitForData(missing.join('; '), attempts);
+  }
+
+  const fields = buildOrderFields(payload, refs, notes);
+  const note = notes.length ? notes.join('; ') : undefined;
+
+  if (existing?.id) {
+    const diff = diffOrderFields(fields, existing);
+
+    if (Object.keys(diff).length) {
+      await updateOne(ORDER_PLURAL, ORDER_SINGULAR, String(existing.id), diff);
+    }
+
+    return { status: 'done', note };
+  }
+
+  const created = await createOne(ORDER_PLURAL, ORDER_SINGULAR, fields);
+
+  if (!created?.id) {
+    throw new Error('заказ не создан');
+  }
+
+  return { status: 'done', note };
+};
+
 /** Обработка одной задачи очереди. */
 export const processTask = async (task: QueueTask): Promise<ProcessOutcome> => {
   const payload = (task.payload ?? {}) as { deleted?: boolean };
@@ -922,6 +1078,16 @@ export const processTask = async (task: QueueTask): Promise<ProcessOutcome> => {
 
   if (task.objectType === 'УниверсальныйСервис') {
     return processServiceDoc(task);
+  }
+
+  if (task.objectType === 'ЗаказПокупателя') {
+    const payload = task.payload as OrderPayload;
+
+    if (!payload?.guid) {
+      throw new Error('в задаче нет payload.guid');
+    }
+
+    return processOrder(payload, task.attemptCount);
   }
 
   throw new Error(`неизвестный objectType: ${task.objectType}`);
