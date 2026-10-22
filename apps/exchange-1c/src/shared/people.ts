@@ -12,6 +12,7 @@ export type PersonRecord = {
   name?: { firstName?: string; lastName?: string };
   phones?: { primaryPhoneNumber?: string; additionalPhones?: string | { number?: string }[] };
   emails?: { primaryEmail?: string; additionalEmails?: string[] };
+  dogovorPoUmolchaniyuId?: string | null;
 };
 
 const fullNameOf = (person: PersonRecord): string =>

@@ -53,11 +53,19 @@ import type { ServiceDocPayload } from 'src/shared/payload-service-doc';
 export type ProcessOutcome = {
   status: 'done' | 'error' | 'pending';
   note?: string;
+  /** Повтор из-за ожидания данных (а не ошибки) — считать попытку, чтобы не ждать вечно. */
+  retry?: boolean;
 };
 
 const DONE: ProcessOutcome = { status: 'done' };
 
 const pending = (note: string): ProcessOutcome => ({ status: 'pending', note });
+
+/**
+ * Сколько раз задача может ждать договор по умолчанию, прежде чем закрыться с пометкой.
+ * В обычном обмене договор приходит в той же порции и подтягивается сразу, лимит — страховка.
+ */
+const CONTRACT_WAIT_ATTEMPTS = 10;
 
 type OwnerRef = { kind: 'company' | 'person'; id: string; name?: string };
 
@@ -65,6 +73,110 @@ const findCompanyByGuid = async (guid: string) =>
   (await findFirst('companies', 'company', `objectGuid[eq]:${guid}`)) as
     | (Record<string, unknown> & { id: string; name?: string })
     | undefined;
+
+const findDogovorByGuid = async (guid: string) =>
+  (await findFirst('dogovora', 'dogovor', `guid[eq]:${guid}`)) as
+    | (Record<string, unknown> & { id: string })
+    | undefined;
+
+/** Договор ещё не в CRM: ждём его с повтором, но не бесконечно. */
+const waitForContract = (note: string, attempts: number): ProcessOutcome => {
+  if (attempts >= CONTRACT_WAIT_ATTEMPTS) {
+    return {
+      status: 'done',
+      note: `${note} — ссылка не проставлена (попыток: ${attempts})`,
+    };
+  }
+
+  return { status: 'pending', note, retry: true };
+};
+
+/**
+ * Гонка при выгрузке: контрагент и его договор пришли одной порцией, но задача договора
+ * ещё лежит в очереди. Обрабатываем её сразу, не дожидаясь следующего прогона крона.
+ */
+const pullContractFromQueue = async (contractGuid: string) => {
+  const task = (await findFirst(
+    'queueTasks',
+    'queueTask',
+    `direction[eq]:IN,status[eq]:${TASK_STATUS.pending},objectType[eq]:contract,objectGuid[eq]:${contractGuid}`,
+  )) as unknown as QueueTask | undefined;
+
+  if (!task?.id) {
+    return undefined;
+  }
+
+  await updateOne('queueTasks', 'queueTask', task.id, {
+    status: TASK_STATUS.processing,
+  });
+
+  try {
+    const outcome = await processContract(task.payload as ContractPayload);
+
+    await updateOne('queueTasks', 'queueTask', task.id, {
+      status:
+        outcome.status === 'pending' ? TASK_STATUS.pending : TASK_STATUS.done,
+      errorText: outcome.note ?? null,
+    });
+  } catch (error) {
+    // договор не обработался — вернём задачу в очередь, ею займётся обычный прогон
+    await updateOne('queueTasks', 'queueTask', task.id, {
+      status: TASK_STATUS.pending,
+      errorText: String(error instanceof Error ? error.message : error).slice(
+        0,
+        400,
+      ),
+    });
+
+    return undefined;
+  }
+
+  return findDogovorByGuid(contractGuid);
+};
+
+/**
+ * Договор по умолчанию контрагента (компании или физлица): ссылка ставится,
+ * как только договор есть в CRM. Не найден — исход `waiting`, задача вернётся на повтор.
+ */
+const applyDefaultContract = async (
+  kind: OwnerRef['kind'],
+  recordId: string,
+  contractGuid: string,
+  currentContractId?: unknown,
+): Promise<{ status: 'linked' } | { status: 'waiting'; note: string }> => {
+  const contract =
+    (await findDogovorByGuid(contractGuid)) ??
+    (await pullContractFromQueue(contractGuid));
+
+  if (!contract?.id) {
+    return {
+      status: 'waiting',
+      note: `договор по умолчанию ${contractGuid} ещё не загружен в CRM`,
+    };
+  }
+
+  const targetId = String(contract.id);
+
+  // уже стоит — не пишем повторно (лишнее обновление карточки = лишнее событие)
+  if (
+    currentContractId !== undefined &&
+    String(currentContractId ?? '') === targetId
+  ) {
+    return { status: 'linked' };
+  }
+
+  if (kind === 'company') {
+    await updateOne('companies', 'company', recordId, {
+      dogovorPoUmolchaniyuId: targetId,
+    });
+  } else {
+    await updateOne('people', 'person', recordId, {
+      dogovorPoUmolchaniyuId: targetId,
+    });
+  }
+
+  return { status: 'linked' };
+};
 
 /** Владелец записи 1С: компания по objectGuid, иначе человек по реестру. */
 const findOwner = async (ownerGuid?: string): Promise<OwnerRef | null> => {
@@ -94,7 +206,10 @@ const findOwner = async (ownerGuid?: string): Promise<OwnerRef | null> => {
 };
 
 /** Компания: upsert по objectGuid + договор по умолчанию (если договор уже есть). */
-const processCompany = async (payload: CompanyPayload): Promise<ProcessOutcome> => {
+const processCompany = async (
+  payload: CompanyPayload,
+  attempts = 0,
+): Promise<ProcessOutcome> => {
   const fields = companyFields(payload);
   const existing = await findCompanyByGuid(payload.guid);
 
@@ -159,18 +274,17 @@ const processCompany = async (payload: CompanyPayload): Promise<ProcessOutcome> 
     }
   }
 
-  // договор по умолчанию: ставим, если он уже загружен
+  // договор по умолчанию: если договор ещё не в CRM, задача ждёт его и вернётся на повтор
   if (payload.default_contract_guid) {
-    const contract = await findFirst(
-      'dogovora',
-      'dogovor',
-      `guid[eq]:${payload.default_contract_guid}`,
+    const link = await applyDefaultContract(
+      'company',
+      companyId,
+      payload.default_contract_guid,
+      existing?.dogovorPoUmolchaniyuId,
     );
 
-    if (contract?.id) {
-      await updateOne('companies', 'company', companyId, {
-        dogovorPoUmolchaniyuId: String(contract.id),
-      });
+    if (link.status === 'waiting') {
+      return waitForContract(link.note, attempts);
     }
   }
 
@@ -227,6 +341,10 @@ type PersonInput = {
   payload: unknown;
   ownerGuid?: string;
   deleted?: boolean;
+  /** Договор по умолчанию из 1С (только у контрагента-физлица). */
+  defaultContractGuid?: string;
+  /** Номер попытки задачи очереди — чтобы ожидание договора не длилось вечно. */
+  attempts?: number;
 };
 
 /** Телефоны карточки: основной + дополнительные (в базе дополнительные бывают строкой JSON). */
@@ -385,6 +503,20 @@ const processPerson = async (input: PersonInput): Promise<ProcessOutcome> => {
     payload: input.payload,
   });
 
+  // Договор по умолчанию у контрагента-физлица (у контактных лиц 1С его не передаёт)
+  if (input.defaultContractGuid) {
+    const link = await applyDefaultContract(
+      'person',
+      personId,
+      input.defaultContractGuid,
+      merge?.dogovorPoUmolchaniyuId,
+    );
+
+    if (link.status === 'waiting') {
+      return waitForContract(link.note, input.attempts ?? 0);
+    }
+  }
+
   if (!input.ownerGuid) {
     return DONE;
   }
@@ -472,10 +604,12 @@ const handleCompanyTask = async (task: QueueTask): Promise<ProcessOutcome> => {
       tipZapisi: REESTR_TYPE.physicalPerson,
       payload,
       deleted: payload.deleted,
+      defaultContractGuid: payload.default_contract_guid,
+      attempts: task.attemptCount,
     });
   }
 
-  return processCompany(payload);
+  return processCompany(payload, task.attemptCount);
 };
 
 const handleContactTask = async (task: QueueTask): Promise<ProcessOutcome> => {
@@ -504,6 +638,7 @@ const handleContactTask = async (task: QueueTask): Promise<ProcessOutcome> => {
       payload,
       ownerGuid: payload.owner_guid,
       deleted: true,
+      attempts: task.attemptCount,
     });
   }
 
@@ -516,6 +651,7 @@ const handleContactTask = async (task: QueueTask): Promise<ProcessOutcome> => {
     tipZapisi: REESTR_TYPE.contactFace,
     payload,
     ownerGuid: payload.owner_guid,
+    attempts: task.attemptCount,
   });
 };
 
@@ -540,11 +676,6 @@ const findRemontByGuid = async (guid: string) =>
 /** «Сотрудники» 1С по guid. */
 const findSotrudnikByGuid = async (guid: string) =>
   (await findFirst('sotrudniki', 'sotrudnik', `guid[eq]:${guid}`)) as
-    | (Record<string, unknown> & { id: string })
-    | undefined;
-
-const findDogovorByGuid = async (guid: string) =>
-  (await findFirst('dogovora', 'dogovor', `guid[eq]:${guid}`)) as
     | (Record<string, unknown> & { id: string })
     | undefined;
 
@@ -785,6 +916,7 @@ export const processTask = async (task: QueueTask): Promise<ProcessOutcome> => {
       payload: task.payload,
       ownerGuid: payload?.owner_guid,
       deleted: payload?.deleted,
+      attempts: task.attemptCount,
     });
   }
 

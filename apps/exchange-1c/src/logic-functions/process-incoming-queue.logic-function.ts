@@ -41,6 +41,11 @@ const handler = async () => {
         await updateOne('queueTasks', 'queueTask', task.id, {
           status: TASK_STATUS.pending,
           errorText: outcome.note ?? null,
+          // ожидание данных (договор ещё не пришёл) тоже считаем попыткой,
+          // иначе задача будет крутиться в очереди вечно
+          ...(outcome.retry
+            ? { attemptCount: (task.attemptCount ?? 0) + 1 }
+            : {}),
         });
 
         results.push({
