@@ -27,6 +27,8 @@ export const CARTRIDGE_TYPE = 'Картриджи';
 
 /** Стадии: название в 1С → значение опции в Twenty. */
 export const STADIYA: Record<string, string> = {
+  // 1С присылает «На приеме»; «На приемке» — старое написание, оставлено на всякий случай
+  'На приеме': 'NA_PRIEMKE',
   'На приемке': 'NA_PRIEMKE',
   'В очереди': 'V_OCHEREDI',
   'В работе': 'V_RABOTE',

@@ -8,7 +8,14 @@ import { RestApiClient } from 'twenty-client-sdk/rest';
 
 export type CrmRecord = Record<string, unknown> & { id: string };
 
-const client = new RestApiClient();
+/**
+ * Все обращения к CRM — от имени приложения (`runAs: 'application'`).
+ * Иначе при запуске по событию от человека логик-функция получает «делегированный»
+ * токен этого пользователя: у обычного сотрудника нет доступа к служебной «Очереди
+ * обмена» (REST отвечает 400), а записи помечались бы его именем и уходили обратно
+ * в 1С как правки человека (эхо).
+ */
+const client = new RestApiClient({ runAs: 'application' });
 
 /** Ошибку оборачиваем с телом ответа — иначе 400 нечем объяснить. */
 const run = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
