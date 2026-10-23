@@ -151,21 +151,33 @@ const QUEUE_SINGULAR = 'queueTask';
 /**
  * Одна открытая задача на карточку: если задача уже лежит в очереди — обновляем
  * её payload актуальным состоянием, иначе создаём новую.
+ *
+ * ⚠️ `fields` при обновлении **объединяются** с теми, что уже есть в задаче.
+ * Иначе вторая правка затирала бы список первой: человек заполнил «Результат
+ * диагностики», через минуту поменял стадию — и текст диагностики в 1С уже не
+ * поедет (1С пишет только поля из `fields`). Значения берутся из карточки,
+ * поэтому всегда свежие; объединение касается только списка «что писать».
  */
 export const upsertRepairOutTask = async (
   payload: RepairOutPayload,
 ): Promise<'created' | 'updated'> => {
-  const open = await findFirst(
+  const open = (await findFirst(
     QUEUE_PLURAL,
     QUEUE_SINGULAR,
     `direction[eq]:OUT,objectGuid[eq]:${payload.guid},status[in]:[PENDING,PROCESSING]`,
-  );
+  )) as (CrmRecord & { payload?: { fields?: unknown } }) | undefined;
 
   if (open?.id) {
+    const previousFields = Array.isArray(open.payload?.fields)
+      ? open.payload.fields.filter((field): field is string => typeof field === 'string')
+      : [];
+
+    const fields = Array.from(new Set([...previousFields, ...payload.fields]));
+
     await updateOne(QUEUE_PLURAL, QUEUE_SINGULAR, String(open.id), {
       action: 'UPDATE',
       status: TASK_STATUS.pending,
-      payload,
+      payload: { ...payload, fields },
       errorText: null,
     });
 
