@@ -24,3 +24,13 @@ export const CHAT_MENTION_SEARCH_FUNCTION_UNIVERSAL_IDENTIFIER =
   '3efc95c3-bb07-4853-870a-b26ff630a15e';
 export const CHAT_OPEN_TARGET_FUNCTION_UNIVERSAL_IDENTIFIER =
   '3bbae2e3-7ea0-40f5-9489-457e9c9f64bf';
+
+// Логик-функции карточки записи: комната по записи и отправка в неё.
+export const CHAT_RECORD_ROOM_FUNCTION_UNIVERSAL_IDENTIFIER =
+  '13f4406f-519b-4a0b-9936-e9ddb0c5efd6';
+export const CHAT_RECORD_SEND_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'b7db3a3e-f3d1-4102-bc33-ad1d87bae7eb';
+
+// Фронт-компонент чата в карточке записи.
+export const CARD_CHAT_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
+  'eaeccefa-3988-40a7-9dcd-a9877d21687a';
