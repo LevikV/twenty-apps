@@ -109,13 +109,13 @@ export const CardChat = () => {
   useEffect(() => {
     void reload();
 
-    const timer = window.setInterval(() => {
+    const timer = setInterval(() => {
       if (draftRef.current.trim().length === 0) {
         void reload();
       }
     }, 10000);
 
-    return () => window.clearInterval(timer);
+    return () => clearInterval(timer);
   }, [reload]);
 
   const send = async () => {
