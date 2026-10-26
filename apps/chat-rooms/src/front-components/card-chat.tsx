@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { defineFrontComponent } from 'twenty-sdk/define';
-import { useSelectedRecordIds } from 'twenty-sdk/front-component';
+import { SidePanelPages, openSidePanelPage, useSelectedRecordIds } from 'twenty-sdk/front-component';
 
 import { CARD_CHAT_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 
@@ -21,6 +21,7 @@ type Message = {
   text: string | null;
   createdAt: string;
   authorName: string;
+  mentions?: MentionView[];
 };
 
 type MentionView = { type: string; id: string; label: string };
@@ -90,33 +91,76 @@ const formatTime = (iso: string): string =>
     minute: '2-digit',
   });
 
-/** Подсветка упоминаний в ленте: «@Подпись» рисуем синим. */
-const renderText = (text: string | null) => {
-  if (!text) {
-    return '';
+const OBJECT_BY_TYPE: Record<string, string> = {
+  POLZOVATEL: 'workspaceMember',
+  SOTRUDNIK: 'sotrudnik',
+  KOMPANIYA: 'company',
+  KONTAKT: 'person',
+  ZAKAZ: 'opportunity',
+  TENDER: 'tender',
+  REMONT: 'remontOborudovaniya',
+  ZAPRAVKA: 'zapravkaKartridzhey',
+  ZADACHA: 'task',
+};
+
+const openMention = (mention: MentionView) => {
+  const objectNameSingular = OBJECT_BY_TYPE[mention.type];
+
+  if (!objectNameSingular) {
+    return;
   }
 
-  const pattern = /@[\wА-Яа-яЁё\-\s]+?(?=\s|$)/g;
-  const parts = text.split(pattern);
-  const matches = text.match(pattern) ?? [];
+  void openSidePanelPage({
+    page: SidePanelPages.ViewRecord,
+    objectNameSingular,
+    recordId: mention.id,
+  }).catch(() => undefined);
+};
 
-  if (matches.length === 0) {
-    return text;
+/** Подсветка упоминаний в ленте — по данным сервера (как в «Центре коммуникации»). */
+const renderMentions = (text: string | null, mentions: MentionView[] = []) => {
+  const value = text ?? '';
+
+  if (mentions.length === 0) {
+    return value;
   }
 
-  return parts.flatMap((part, index) => {
-    const mention = matches[index];
+  const pattern = mentions
+    .map((mention) => `@${mention.label}`)
+    .filter((token, index, all) => all.indexOf(token) === index)
+    .sort((left, right) => right.length - left.length)
+    .map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+
+  if (!pattern) {
+    return value;
+  }
+
+  const regex = new RegExp(`(${pattern})`, 'g');
+  const parts = value.split(regex);
+
+  return parts.map((part, index) => {
+    const mention = mentions.find((item) => `@${item.label}` === part);
 
     if (!mention) {
-      return [part];
+      return <span key={`t-${index}`}>{part}</span>;
     }
 
-    return [
-      part,
-      <span key={`m-${index}`} style={{ color: '#1961ff', fontWeight: 600 }}>
-        {mention}
-      </span>,
-    ];
+    return (
+      <span
+        key={`m-${index}`}
+        onClick={() => openMention(mention)}
+        style={{
+          background: 'rgba(25,97,255,0.12)',
+          borderRadius: '4px',
+          padding: '0 3px',
+          fontWeight: 600,
+          cursor: 'pointer',
+        }}
+      >
+        {part}
+      </span>
+    );
   });
 };
 
@@ -337,7 +381,7 @@ export const CardChat = () => {
                 wordBreak: 'break-word',
               }}
             >
-              {renderText(message.text)}
+              {renderMentions(message.text, message.mentions ?? [])}
             </div>
           </div>
         ))}
