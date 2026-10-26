@@ -76,6 +76,12 @@ const fullName = (row: Row): string => {
   return full || 'Сотрудник';
 };
 
+const CHAT_PAGE_PATH = '/page/30e9b2da-683c-4fce-8a61-5c5102d69f3e';
+
+const readEnv = (): Record<string, string | undefined> =>
+  ((globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process
+    ?.env ?? {}) as Record<string, string | undefined>;
+
 const asString = (value: unknown): string | null =>
   typeof value === 'string' && value.length > 0 ? value : null;
 
@@ -231,6 +237,7 @@ export class ChatService {
 
     if (mentions.length > 0) {
       await this.saveMentions(String(created.id), mentions);
+      await this.notifyMentioned(memberId, mentions, text);
     }
 
     await this.client.patch<unknown>(`/rest/chats/${chatId}`, {
@@ -298,6 +305,80 @@ export class ChatService {
     }
 
     return map;
+  }
+
+  /**
+   * Пуш упомянутым людям.
+   *
+   * Уведомление получает только тот, у кого есть учётная запись (владелец карточки
+   * «Сотрудник»). Автору своё же упоминание не шлём.
+   * Адрес — внешний `TWENTY_API_URL`: обращения к внутренним адресам docker-сети
+   * блокируются защитой от SSRF.
+   */
+  private async notifyMentioned(
+    senderMemberId: string,
+    mentions: MentionView[],
+    text: string,
+  ): Promise<void> {
+    const targets = new Set<string>();
+
+    for (const mention of mentions) {
+      if (mention.type !== 'POLZOVATEL' && mention.type !== 'SOTRUDNIK') {
+        continue;
+      }
+
+      const memberId =
+        mention.type === 'POLZOVATEL'
+          ? mention.id
+          : await this.memberIdBySotrudnik(mention.id);
+
+      if (memberId && memberId !== senderMemberId) {
+        targets.add(memberId);
+      }
+    }
+
+    if (targets.size === 0) {
+      return;
+    }
+
+    const names = await this.memberNames();
+    const authorName = names[senderMemberId] ?? 'Сотрудник';
+    const apiBase = (readEnv().TWENTY_API_URL ?? '').replace(/\/+$/, '');
+
+    if (!apiBase) {
+      return;
+    }
+
+    for (const memberId of targets) {
+      const record = await this.client.get<unknown>(`/rest/workspaceMembers/${memberId}`, {
+        query: { select: 'id,userId' },
+      });
+
+      const userId = asString(
+        (record as { data?: { workspaceMember?: { userId?: string } } })?.data?.workspaceMember
+          ?.userId,
+      );
+
+      if (!userId) {
+        continue;
+      }
+
+      await fetch(`${apiBase}/api/notify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          title: `${authorName} упомянул вас в чате`,
+          text: text.slice(0, 160),
+          variant: 'info',
+          tip: 'soobshchenie',
+          prioritet: 'obychnoe',
+          link: CHAT_PAGE_PATH,
+          linkLabel: 'Открыть чат',
+          duration: 8000,
+        }),
+      });
+    }
   }
 
   /** Учётная запись человека по карточке сотрудника (если она есть). */
