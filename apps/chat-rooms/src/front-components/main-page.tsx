@@ -246,6 +246,10 @@ const ChatCenter = () => {
   const composerRef = useRef<any>(null);
   const suppressRef = useRef<{ until: number; expected: string; caret: number } | null>(null);
 
+  // Хост после подмены значения возвращает каретку на прежнее место (несколько
+  // раз, с задержкой), поэтому позицию приходится настойчиво переустанавливать.
+  const caretSeqRef = useRef(0);
+
   activeChatIdRef.current = activeChatId;
 
   const loadDialogs = useCallback(async () => {
@@ -378,25 +382,47 @@ const ChatCenter = () => {
     suppressRef.current = { until: Date.now() + 500, expected: value, caret };
     setDraft(value);
 
+    caretSeqRef.current += 1;
+
+    const seq = caretSeqRef.current;
+    let attempts = 0;
+
     const write = () => {
+      if (caretSeqRef.current !== seq) {
+        return false;
+      }
+
       const node = composerRef.current;
 
       if (!node) {
-        return;
+        return true;
       }
 
       try {
-        node.value = value;
-        node.selectionStart = caret;
-        node.selectionEnd = caret;
+        if (node.value !== value) {
+          node.value = value;
+        }
+
+        if (node.selectionStart !== caret || node.selectionEnd !== caret) {
+          node.selectionStart = caret;
+          node.selectionEnd = caret;
+        }
+
         node.focus?.();
       } catch {
         // песочница не даёт доступа к узлу — остаётся значение из состояния
       }
+
+      return true;
     };
 
-    setTimeout(write, 30);
-    setTimeout(write, 150);
+    const timer = setInterval(() => {
+      attempts += 1;
+
+      if (!write() || attempts >= 12) {
+        clearInterval(timer);
+      }
+    }, 80);
   };
 
   const renderHighlightedDraft = () => {
@@ -821,6 +847,10 @@ const ChatCenter = () => {
                       updateMentionState(value);
                     }}
                     onKeyDown={(event) => {
+                      if (String(event.key ?? '').length === 1) {
+                        caretSeqRef.current += 1;
+                      }
+
                       if (mentionQuery !== null && suggestions.length > 0) {
                         if (event.key === 'ArrowDown') {
                           event.preventDefault();
