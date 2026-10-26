@@ -237,7 +237,7 @@ export class ChatService {
 
     if (mentions.length > 0) {
       await this.saveMentions(String(created.id), mentions);
-      await this.notifyMentioned(memberId, mentions, text);
+      await this.notifyMentioned(memberId, chatId, mentions, text);
     }
 
     await this.client.patch<unknown>(`/rest/chats/${chatId}`, {
@@ -317,6 +317,7 @@ export class ChatService {
    */
   private async notifyMentioned(
     senderMemberId: string,
+    chatId: string,
     mentions: MentionView[],
     text: string,
   ): Promise<void> {
@@ -373,7 +374,7 @@ export class ChatService {
           variant: 'info',
           tip: 'soobshchenie',
           prioritet: 'obychnoe',
-          link: CHAT_PAGE_PATH,
+          link: `${CHAT_PAGE_PATH}?chatId=${chatId}`,
           linkLabel: 'Открыть чат',
           duration: 8000,
         }),

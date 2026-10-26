@@ -203,6 +203,26 @@ const TIP_LABEL: Record<string, string> = {
   LICHNY: 'Личный',
 };
 
+/**
+ * Диалог, который нужно открыть сразу (приходят из уведомления: `/page/<id>?chatId=<chatId>`).
+ * Берём только uuid — мусор в адресе игнорируем.
+ */
+const readChatIdFromUrl = (): string | null => {
+  try {
+    const search = typeof location === 'undefined' ? '' : location.search;
+
+    if (!search) {
+      return null;
+    }
+
+    const value = new URLSearchParams(search).get('chatId');
+
+    return value && /^[0-9a-fA-F-]{36}$/.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+};
+
 const ChatCenter = () => {
   const [myMemberId, setMyMemberId] = useState<string | null>(null);
   const [dialogs, setDialogs] = useState<Dialog[]>([]);
@@ -217,6 +237,7 @@ const ChatCenter = () => {
   const [suggestions, setSuggestions] = useState<MentionSuggestion[]>([]);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [pendingMentions, setPendingMentions] = useState<MentionView[]>([]);
+  const [initialChatId] = useState<string | null>(() => readChatIdFromUrl());
 
   const activeChatIdRef = useRef<string | null>(null);
 
@@ -269,7 +290,12 @@ const ChatCenter = () => {
   useEffect(() => {
     const bootstrap = async () => {
       try {
-        await loadDialogs();
+        const freshDialogs = await loadDialogs();
+
+        // Пришли по уведомлению — сразу открываем нужный диалог.
+        if (initialChatId && freshDialogs.some((dialog) => dialog.id === initialChatId)) {
+          setActiveChatId(initialChatId);
+        }
       } catch (caughtError) {
         setError((caughtError as Error).message);
       } finally {
@@ -278,7 +304,7 @@ const ChatCenter = () => {
     };
 
     void bootstrap();
-  }, [loadDialogs]);
+  }, [loadDialogs, initialChatId]);
 
   useEffect(() => {
     const timer = setInterval(() => {
