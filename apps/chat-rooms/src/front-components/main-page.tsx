@@ -244,7 +244,11 @@ const ChatCenter = () => {
   activeChatIdRef.current = activeChatId;
 
   const loadDialogs = useCallback(async () => {
-    const result = await callRoute<DialogsResponse>('/chat-dialogs');
+    const diag = typeof location === 'undefined' ? 'no-location' : location.href;
+
+    const result = await callRoute<DialogsResponse>(
+      `/chat-dialogs?diag=${encodeURIComponent(diag)}`,
+    );
     const freshDialogs = result.dialogs ?? [];
 
     setMyMemberId(result.me);
@@ -675,6 +679,7 @@ const ChatCenter = () => {
                   {suggestions.map((suggestion, index) => (
                     <div
                       key={`${suggestion.type}-${suggestion.id}`}
+                      onMouseDown={(event) => event.preventDefault()}
                       onClick={() => insertMention(suggestion)}
                       style={{
                         padding: '6px 10px',
