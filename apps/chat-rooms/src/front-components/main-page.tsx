@@ -121,7 +121,6 @@ const ChatCenter = () => {
   const [isSending, setIsSending] = useState(false);
 
   const activeChatIdRef = useRef<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   activeChatIdRef.current = activeChatId;
 
@@ -281,10 +280,6 @@ const ChatCenter = () => {
     );
     void markRead(activeChatId).catch(() => undefined);
   }, [activeChatId, loadMessages, markRead]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ block: 'end' });
-  }, [messages]);
 
   const sendMessage = async () => {
     const text = draft.trim();
@@ -545,8 +540,6 @@ const ChatCenter = () => {
                   </div>
                 );
               })}
-
-              <div ref={messagesEndRef} />
             </div>
 
             {error && (
