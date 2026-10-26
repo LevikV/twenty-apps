@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { defineFrontComponent } from 'twenty-sdk/define';
+import { SidePanelPages, openSidePanelPage } from 'twenty-sdk/front-component';
 
 import { MAIN_PAGE_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 
@@ -22,12 +23,19 @@ type Dialog = {
   unread: number;
 };
 
+type MentionView = {
+  type: string;
+  id: string;
+  label: string;
+};
+
 type Message = {
   id: string;
   text: string | null;
   createdAt: string;
   authorId: string | null;
   authorName: string;
+  mentions?: MentionView[];
 };
 
 type DialogsResponse = {
@@ -116,47 +124,77 @@ const formatDay = (iso: string | null): string => {
   return date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
 };
 
-const MENTION_RE = /@\[([^\]]+)\]\(([A-Z]+):([0-9a-fA-F-]{36})\)/g;
+const OBJECT_BY_TYPE: Record<string, string> = {
+  POLZOVATEL: 'workspaceMember',
+  SOTRUDNIK: 'sotrudnik',
+  KOMPANIYA: 'company',
+  KONTAKT: 'person',
+  ZAKAZ: 'opportunity',
+  TENDER: 'tender',
+  REMONT: 'remontOborudovaniya',
+  ZAPRAVKA: 'zapravkaKartridzhey',
+  ZADACHA: 'task',
+};
 
-const renderMentions = (text: string | null) => {
+const openMention = (mention: MentionView) => {
+  const objectNameSingular = OBJECT_BY_TYPE[mention.type];
+
+  if (!objectNameSingular) {
+    return;
+  }
+
+  void openSidePanelPage({
+    page: SidePanelPages.ViewRecord,
+    objectNameSingular,
+    recordId: mention.id,
+  }).catch(() => undefined);
+};
+
+/** Подсвечивает в тексте сообщения упоминания и делает их ссылками на карточки. */
+const renderMentions = (text: string | null, mentions: MentionView[] = []) => {
   const value = text ?? '';
-  const parts: (string | { label: string; key: string })[] = [];
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
 
-  MENTION_RE.lastIndex = 0;
+  if (mentions.length === 0) {
+    return value;
+  }
 
-  while ((match = MENTION_RE.exec(value)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(value.slice(lastIndex, match.index));
+  const pattern = mentions
+    .map((mention) => `@${mention.label}`)
+    .filter((token, index, all) => all.indexOf(token) === index)
+    .sort((left, right) => right.length - left.length)
+    .map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+
+  if (!pattern) {
+    return value;
+  }
+
+  const regex = new RegExp(`(${pattern})`, 'g');
+  const parts = value.split(regex);
+
+  return parts.map((part, index) => {
+    const mention = mentions.find((item) => `@${item.label}` === part);
+
+    if (!mention) {
+      return <span key={`t-${index}`}>{part}</span>;
     }
 
-    parts.push({ label: match[1], key: `${match[2]}-${match[3]}-${match.index}` });
-    lastIndex = match.index + match[0].length;
-  }
-
-  if (lastIndex < value.length) {
-    parts.push(value.slice(lastIndex));
-  }
-
-  return parts.map((part, index) =>
-    typeof part === 'string' ? (
-      <span key={`t-${index}`}>{part}</span>
-    ) : (
+    return (
       <span
         key={`m-${index}`}
+        onClick={() => openMention(mention)}
         style={{
           background: 'rgba(25,97,255,0.12)',
-          color: 'inherit',
           borderRadius: '4px',
           padding: '0 3px',
           fontWeight: 600,
+          cursor: 'pointer',
         }}
       >
-        @{part.label}
+        {part}
       </span>
-    ),
-  );
+    );
+  });
 };
 
 const TIP_LABEL: Record<string, string> = {
@@ -178,6 +216,7 @@ const ChatCenter = () => {
   const [mentionStart, setMentionStart] = useState<number>(-1);
   const [suggestions, setSuggestions] = useState<MentionSuggestion[]>([]);
   const [mentionIndex, setMentionIndex] = useState(0);
+  const [pendingMentions, setPendingMentions] = useState<MentionView[]>([]);
 
   const activeChatIdRef = useRef<string | null>(null);
 
@@ -294,10 +333,24 @@ const ChatCenter = () => {
     const before = draft.slice(0, mentionStart);
     const after = draft.slice(mentionStart + 1 + (mentionQuery?.length ?? 0));
 
-    setDraft(`${before}@[${suggestion.label}](${suggestion.type}:${suggestion.id})${after}`);
+    // В поле ввода — обычный текст «@Подпись»; привязка к записи живёт в состоянии
+    // и уходит на сервер вместе с сообщением.
+    setDraft(`${before}@${suggestion.label} ${after}`);
     setMentionQuery(null);
     setSuggestions([]);
     setMentionIndex(0);
+    setPendingMentions((previous) => {
+      const key = `${suggestion.type}:${suggestion.id}`;
+
+      if (previous.some((item) => `${item.type}:${item.id}` === key)) {
+        return previous;
+      }
+
+      return [
+        ...previous,
+        { type: suggestion.type, id: suggestion.id, label: suggestion.label },
+      ];
+    });
   };
 
   useEffect(() => {
@@ -343,9 +396,13 @@ const ChatCenter = () => {
     setError(null);
 
     try {
-      await callRoute('/chat-send', { method: 'POST', body: { chatId: activeChatId, text } });
+      await callRoute('/chat-send', {
+        method: 'POST',
+        body: { chatId: activeChatId, text, mentions: pendingMentions },
+      });
 
       setDraft('');
+      setPendingMentions([]);
       await Promise.all([loadMessages(activeChatId), loadDialogs()]);
     } catch (caughtError) {
       setError((caughtError as Error).message);
@@ -563,7 +620,7 @@ const ChatCenter = () => {
                           wordBreak: 'break-word',
                         }}
                       >
-                        {renderMentions(message.text)}
+                        {renderMentions(message.text, message.mentions)}
                       </div>
                     </div>
                   </div>

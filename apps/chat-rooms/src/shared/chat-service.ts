@@ -23,12 +23,19 @@ export type DialogView = {
   unread: number;
 };
 
+export type MentionView = {
+  type: string;
+  id: string;
+  label: string;
+};
+
 export type MessageView = {
   id: string;
   text: string | null;
   createdAt: string;
   authorId: string | null;
   authorName: string;
+  mentions: MentionView[];
 };
 
 const unwrap = (body: unknown): Record<string, unknown> =>
@@ -178,26 +185,34 @@ export class ChatService {
     });
 
     const names = await this.memberNames();
+    const rows = rowsOf(response, 'soobshcheniya').filter((message) => !!message.id);
+    const mentionMap = await this.mentionsByMessage(rows.map((message) => String(message.id)));
 
-    const messages = rowsOf(response, 'soobshcheniya')
+    const messages = rows
       .map((message) => {
         const authorId = asString(message.avtorId);
+        const id = String(message.id ?? '');
 
         return {
-          id: String(message.id ?? ''),
+          id,
           text: asString(message.tekst),
           createdAt: String(message.createdAt ?? ''),
           authorId,
           authorName: authorId ? names[authorId] ?? 'Сотрудник' : 'Сотрудник',
+          mentions: mentionMap.get(id) ?? [],
         };
       })
-      .filter((message) => message.id.length > 0)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 
     return { messages, names };
   }
 
-  async send(memberId: string, chatId: string, text: string): Promise<{ id: string }> {
+  async send(
+    memberId: string,
+    chatId: string,
+    text: string,
+    mentions: MentionView[] = [],
+  ): Promise<{ id: string }> {
     await this.assertParticipant(memberId, chatId);
 
     const created = pickCreated(
@@ -212,6 +227,10 @@ export class ChatService {
 
     if (!created?.id) {
       throw new Error('сообщение создано, но в ответе нет id');
+    }
+
+    if (mentions.length > 0) {
+      await this.saveMentions(String(created.id), mentions);
     }
 
     await this.client.patch<unknown>(`/rest/chats/${chatId}`, {
@@ -238,6 +257,91 @@ export class ChatService {
     }
 
     return { id: created.id };
+  }
+
+  private async mentionsByMessage(messageIds: string[]): Promise<Map<string, MentionView[]>> {
+    const map = new Map<string, MentionView[]>();
+
+    if (messageIds.length === 0) {
+      return map;
+    }
+
+    const response = await this.client.get<unknown>('/rest/upominaniya', {
+      query: {
+        filter: `soobshchenieId[in]:[${messageIds.join(',')}]`,
+        select: 'id,name,soobshchenieId,tipObekta,zapisId',
+        limit: 200,
+      },
+    });
+
+    for (const row of rowsOf(response, 'upominaniya')) {
+      const messageId = asString(row.soobshchenieId);
+
+      if (!messageId) {
+        continue;
+      }
+
+      const mention: MentionView = {
+        type: asString(row.tipObekta) ?? 'ZAKAZ',
+        id: asString(row.zapisId) ?? '',
+        label: asString(row.name) ?? '',
+      };
+
+      if (!mention.id) {
+        continue;
+      }
+
+      const existing = map.get(messageId) ?? [];
+
+      existing.push(mention);
+      map.set(messageId, existing);
+    }
+
+    return map;
+  }
+
+  /** Учётная запись человека по карточке сотрудника (если она есть). */
+  private async memberIdBySotrudnik(sotrudnikId: string): Promise<string | null> {
+    const response = await this.client.get<unknown>('/rest/workspaceMembers', {
+      query: { filter: `sotrudnikId[eq]:"${sotrudnikId}"`, select: 'id', limit: 1 },
+    });
+
+    return asString(rowsOf(response, 'workspaceMembers')[0]?.id);
+  }
+
+  private async saveMentions(messageId: string, mentions: MentionView[]): Promise<void> {
+    const seen = new Set<string>();
+
+    for (const mention of mentions) {
+      const key = `${mention.type}:${mention.id}`;
+
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+
+      const payload: Record<string, unknown> = {
+        name: mention.label,
+        soobshchenieId: messageId,
+        tipObekta: mention.type,
+        zapisId: mention.id,
+      };
+
+      if (mention.type === 'POLZOVATEL') {
+        payload.polzovatelId = mention.id;
+      }
+
+      if (mention.type === 'SOTRUDNIK') {
+        const memberId = await this.memberIdBySotrudnik(mention.id);
+
+        if (memberId) {
+          payload.polzovatelId = memberId;
+        }
+      }
+
+      await this.client.post<unknown>('/rest/upominaniya', payload);
+    }
   }
 
   async markRead(memberId: string, chatId: string): Promise<void> {

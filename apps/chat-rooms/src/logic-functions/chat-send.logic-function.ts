@@ -23,7 +23,11 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
     });
   }
 
-  const body = (event.body ?? {}) as { chatId?: string; text?: string };
+  const body = (event.body ?? {}) as {
+    chatId?: string;
+    text?: string;
+    mentions?: { type?: string; id?: string; label?: string }[];
+  };
   const chatId = String(body.chatId ?? '').trim();
   const text = String(body.text ?? '').trim();
 
@@ -35,8 +39,16 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
   }
 
   try {
+    const mentions = (body.mentions ?? [])
+      .filter((mention) => mention.type && mention.id && mention.label)
+      .map((mention) => ({
+        type: String(mention.type),
+        id: String(mention.id),
+        label: String(mention.label),
+      }));
+
     const service = new ChatService();
-    const result = await service.send(context.workspaceMemberId, chatId, text);
+    const result = await service.send(context.workspaceMemberId, chatId, text, mentions);
 
     return new Response(JSON.stringify(result), {
       status: 200,
