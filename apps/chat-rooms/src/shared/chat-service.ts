@@ -182,6 +182,16 @@ export class ChatService {
   ): Promise<{ messages: MessageView[]; names: Record<string, string> }> {
     await this.assertParticipant(memberId, chatId);
 
+    return this.messagesByChat(chatId);
+  }
+
+  /**
+   * Лента без проверки участия — для карточки записи: обсуждение читает любой,
+   * у кого есть доступ к самой записи (участник — это про подписку и уведомления).
+   */
+  async messagesByChat(
+    chatId: string,
+  ): Promise<{ messages: MessageView[]; names: Record<string, string> }> {
     const response = await this.client.get<unknown>('/rest/soobshcheniya', {
       query: {
         filter: `chatId[eq]:"${chatId}"`,

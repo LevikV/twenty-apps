@@ -213,6 +213,12 @@ export const CardChat = () => {
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        {room?.chatId && !room.member && (
+          <div style={{ fontSize: '11px', color: '#8b8b8b' }}>
+            Вы читаете обсуждение, но не участник — напишите, и будете получать уведомления.
+          </div>
+        )}
+
         <textarea
           value={draft}
           onChange={(event) => setDraft(event.target.value)}

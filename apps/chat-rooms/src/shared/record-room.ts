@@ -27,6 +27,8 @@ export type RecordKind = {
   /** Поле владельца записи: ответственный (сделки) или исполнитель (задача). */
   ownerField?: string;
   ownerIsMember?: boolean;
+  /** Поле «Мастер» (ремонт): тоже участник комнаты. */
+  masterField?: string;
 };
 
 const KINDS: RecordKind[] = [
@@ -45,6 +47,7 @@ const KINDS: RecordKind[] = [
     tip: 'SDELKA',
     targetFieldName: 'sdelkaRemontOborudovaniya',
     ownerField: 'otvetstvennyyId',
+    masterField: 'masterId',
   },
   {
     singular: 'tender',
@@ -104,7 +107,7 @@ export class RecordRoomService {
 
   private async resolve(recordId: string): Promise<{ kind: RecordKind; record: Row } | null> {
     for (const kind of KINDS) {
-      const select = ['id', 'name', 'title', 'createdBy', kind.ownerField]
+      const select = ['id', 'name', 'title', 'createdBy', kind.ownerField, kind.masterField]
         .filter((field): field is string => !!field)
         .join(',');
 
@@ -259,12 +262,22 @@ export class RecordRoomService {
     return chatId;
   }
 
+  /**
+   * Кого подтягиваем в комнату при создании.
+   *
+   * Только те, кого назначили осознанно: соисполнители и наблюдатели из связки
+   * «Участник записи», мастер ремонта. Ответственный, исполнитель и автор записи
+   * в комнату НЕ тянутся (решение 26.10.2026) — они прочитают её из карточки,
+   * а участниками станут, если сами напишут.
+   */
   private async collectParticipants(
     kind: RecordKind,
     record: Row,
     authorMemberId: string,
   ): Promise<{ memberId: string; rol: string }[]> {
-    const result: { memberId: string; rol: string }[] = [{ memberId: authorMemberId, rol: 'VEDUSHCHIY' }];
+    const result: { memberId: string; rol: string }[] = [
+      { memberId: authorMemberId, rol: 'VEDUSHCHIY' },
+    ];
     const seen = new Set<string>([authorMemberId]);
 
     const push = (memberId: string | null, rol: string) => {
@@ -274,18 +287,11 @@ export class RecordRoomService {
       }
     };
 
-    const creator = asString((record.createdBy as { workspaceMemberId?: string } | undefined)?.workspaceMemberId);
+    if (kind.masterField) {
+      const master = asString(record[kind.masterField]);
 
-    push(creator, 'UCHASTNIK');
-
-    if (kind.ownerField) {
-      const owner = asString(record[kind.ownerField]);
-
-      if (owner) {
-        push(
-          kind.ownerIsMember ? owner : await this.memberIdBySotrudnik(owner),
-          'UCHASTNIK',
-        );
+      if (master) {
+        push(await this.memberIdBySotrudnik(master), 'UCHASTNIK');
       }
     }
 
@@ -304,10 +310,7 @@ export class RecordRoomService {
         continue;
       }
 
-      push(
-        await this.memberIdBySotrudnik(sotrudnikId),
-        asString(row.rol) ?? 'NABLYUDATEL',
-      );
+      push(await this.memberIdBySotrudnik(sotrudnikId), asString(row.rol) ?? 'NABLYUDATEL');
     }
 
     return result;

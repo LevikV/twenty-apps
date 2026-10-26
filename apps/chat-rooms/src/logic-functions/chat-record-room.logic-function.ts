@@ -36,15 +36,16 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
     const rooms = new RecordRoomService();
     const state = await rooms.describe(recordId, context.workspaceMemberId);
 
-    if (!state.chatId || !state.member) {
-      return new Response(
-        JSON.stringify({ ...state, messages: [], names: {} }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      );
+    if (!state.chatId) {
+      return new Response(JSON.stringify({ ...state, messages: [], names: {} }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     }
 
+    // Читать может любой, у кого есть доступ к записи; участник — это про подписку.
     const chat = new ChatService();
-    const feed = await chat.messages(context.workspaceMemberId, state.chatId);
+    const feed = await chat.messagesByChat(state.chatId);
 
     return new Response(JSON.stringify({ ...state, ...feed }), {
       status: 200,
