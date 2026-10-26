@@ -1,75 +1,86 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { defineFrontComponent } from 'twenty-sdk/define';
-import { useUserId } from 'twenty-sdk/front-component';
 
 import { MAIN_PAGE_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 
-type Chat = {
+/**
+ * Центр коммуникации: список диалогов сотрудника, лента, отправка.
+ *
+ * Все данные берутся не напрямую из REST/GraphQL, а со служебных маршрутов
+ * приложения (`/chat-dialogs`, `/chat-messages`, `/chat-send`, `/chat-read`).
+ * Причина: объекты чата кастомные, у ролей сотрудников прав на них нет, а
+ * фильтровать «мои диалоги» надёжно только на сервере — там, где известен
+ * настоящий пользователь из токена.
+ */
+
+type Dialog = {
   id: string;
   name: string;
-  tip: string;
-  vremyaPoslednego: string | null;
-  posledneeSoobshchenie: string | null;
-};
-
-type Participant = {
-  id: string;
-  chatId: string;
-  neprochitano: number | null;
-  prochitanoDo: string | null;
+  tip: string | null;
+  lastMessage: string | null;
+  lastAt: string | null;
+  unread: number;
 };
 
 type Message = {
   id: string;
-  tekst: string | null;
+  text: string | null;
   createdAt: string;
-  avtorId: string | null;
-  chatId: string;
+  authorId: string | null;
+  authorName: string;
 };
 
-type WorkspaceMember = {
-  id: string;
-  name?: string | { firstName?: string; lastName?: string } | null;
+type DialogsResponse = {
+  me: string;
+  dialogs: Dialog[];
+  names: Record<string, string>;
+};
+
+type MessagesResponse = {
+  messages: Message[];
+  names: Record<string, string>;
 };
 
 const env = (globalThis as unknown as { process?: { env?: Record<string, string> } })
   .process?.env ?? {};
-const API_BASE = (
-  env.TWENTY_API_URL ||
-  (globalThis as unknown as { location?: { origin?: string } }).location?.origin ||
-  ''
-).replace(/\/+$/, '');
+const FUNCTIONS_BASE = (env.TWENTY_FUNCTIONS_URL ?? '').replace(/\/+$/, '');
 const APP_TOKEN = env.TWENTY_APP_ACCESS_TOKEN ?? '';
 
-const request = async <T,>(path: string, init?: RequestInit): Promise<T> => {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
+const callRoute = async <T,>(
+  path: string,
+  init?: { method?: 'GET' | 'POST'; body?: unknown },
+): Promise<T> => {
+  const method = init?.method ?? 'GET';
+  const url =
+    method === 'GET'
+      ? `${FUNCTIONS_BASE}${path}${path.includes('?') ? '&' : '?'}_ts=${Date.now()}`
+      : `${FUNCTIONS_BASE}${path}`;
+
+  const response = await fetch(url, {
+    method,
     headers: {
       Authorization: `Bearer ${APP_TOKEN}`,
       'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
     },
+    ...(method === 'POST' ? { body: JSON.stringify(init?.body ?? {}) } : {}),
   });
 
+  const text = await response.text();
+  let payload: unknown = null;
+
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+
   if (!response.ok) {
-    const body = await response.text();
+    const message = (payload as { error?: string } | null)?.error;
 
-    throw new Error(`HTTP ${response.status}: ${body.slice(0, 300)}`);
+    throw new Error(message ?? `HTTP ${response.status}: ${text.slice(0, 200)}`);
   }
 
-  return (await response.json()) as T;
-};
-
-const memberName = (member?: WorkspaceMember | null): string => {
-  if (!member?.name) {
-    return 'Сотрудник';
-  }
-
-  if (typeof member.name === 'string') {
-    return member.name;
-  }
-
-  return [member.name.firstName, member.name.lastName].filter(Boolean).join(' ') || 'Сотрудник';
+  return payload as T;
 };
 
 const formatTime = (iso: string | null): string => {
@@ -91,9 +102,7 @@ const formatDay = (iso: string | null): string => {
   const date = new Date(iso);
   const today = new Date();
 
-  const isToday = date.toDateString() === today.toDateString();
-
-  if (isToday) {
+  if (date.toDateString() === today.toDateString()) {
     return formatTime(iso);
   }
 
@@ -107,14 +116,10 @@ const TIP_LABEL: Record<string, string> = {
 };
 
 const ChatCenter = () => {
-  const userId = useUserId();
-
   const [myMemberId, setMyMemberId] = useState<string | null>(null);
-  const [participants, setParticipants] = useState<Participant[]>([]);
-  const [chats, setChats] = useState<Chat[]>([]);
-  const [members, setMembers] = useState<Record<string, string>>({});
-  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [dialogs, setDialogs] = useState<Dialog[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -124,128 +129,54 @@ const ChatCenter = () => {
 
   activeChatIdRef.current = activeChatId;
 
-  const loadMembers = useCallback(async () => {
-    const result = await request<{ data: { workspaceMembers: WorkspaceMember[] } }>(
-      '/rest/workspaceMembers?select=id,name&limit=60',
-    );
+  const loadDialogs = useCallback(async () => {
+    const result = await callRoute<DialogsResponse>('/chat-dialogs');
+    const freshDialogs = result.dialogs ?? [];
 
-    const map: Record<string, string> = {};
+    setMyMemberId(result.me);
+    setDialogs(freshDialogs);
 
-    for (const member of result.data.workspaceMembers) {
-      map[member.id] = memberName(member);
-    }
-
-    setMembers(map);
+    return freshDialogs;
   }, []);
 
-  const loadDialogs = useCallback(
-    async (memberId: string) => {
-      const participantResult = await request<{ data: { chatParticipants: Participant[] } }>(
-        `/rest/chatParticipants?filter=polzovatelId[eq]:${memberId}&select=id,chatId,neprochitano,prochitanoDo&limit=60`,
-      );
-
-      const myParticipants = participantResult.data.chatParticipants ?? [];
-
-      if (myParticipants.length === 0) {
-        setParticipants([]);
-        setChats([]);
-
-        return;
-      }
-
-      const ids = myParticipants.map((participant) => participant.chatId).join(',');
-
-      const chatResult = await request<{ data: { chats: Chat[] } }>(
-        `/rest/chats?filter=id[in]:[${ids}]&select=id,name,tip,vremyaPoslednego,posledneeSoobshchenie&limit=60`,
-      );
-
-      const sortedChats = [...(chatResult.data.chats ?? [])].sort((left, right) => {
-        const leftTime = left.vremyaPoslednego ?? '';
-        const rightTime = right.vremyaPoslednego ?? '';
-
-        return rightTime.localeCompare(leftTime);
-      });
-
-      setParticipants(myParticipants);
-      setChats(sortedChats);
-    },
-    [],
-  );
-
   const loadMessages = useCallback(async (chatId: string) => {
-    const result = await request<{ data: { soobshcheniya: Message[] } }>(
-      `/rest/soobshcheniya?filter=chatId[eq]:${chatId}&select=id,tekst,createdAt,avtorId,chatId&limit=60`,
+    const result = await callRoute<MessagesResponse>(
+      `/chat-messages?chatId=${encodeURIComponent(chatId)}`,
     );
 
-    const sorted = [...(result.data.soobshcheniya ?? [])].sort((left, right) =>
-      left.createdAt.localeCompare(right.createdAt),
-    );
-
-    setMessages(sorted);
+    setMessages(result.messages ?? []);
   }, []);
 
   const markRead = useCallback(async (chatId: string) => {
-    const result = await request<{ data: { chatParticipants: Participant[] } }>(
-      `/rest/chatParticipants?filter=chatId[eq]:${chatId}&select=id,polzovatelId,neprochitano&limit=60`,
+    await callRoute('/chat-read', { method: 'POST', body: { chatId } });
+
+    setDialogs((previous) =>
+      previous.map((dialog) => (dialog.id === chatId ? { ...dialog, unread: 0 } : dialog)),
     );
-
-    const me = result.data.chatParticipants?.find(
-      (participant) =>
-        (participant as unknown as { polzovatelId?: string }).polzovatelId === undefined
-          ? false
-          : (participant as unknown as { polzovatelId?: string }).polzovatelId === myMemberId,
-    );
-
-    if (!me || (me.neprochitano ?? 0) === 0) {
-      return;
-    }
-
-    await request(`/rest/chatParticipants/${me.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ neprochitano: 0, prochitanoDo: new Date().toISOString() }),
-    });
-
-    setParticipants((previous) =>
-      previous.map((participant) =>
-        participant.id === me.id ? { ...participant, neprochitano: 0 } : participant,
-      ),
-    );
-  }, [myMemberId]);
+  }, []);
 
   const refresh = useCallback(async () => {
-    if (!myMemberId) {
+    const freshDialogs = await loadDialogs();
+    const activeId = activeChatIdRef.current;
+
+    if (!activeId) {
       return;
     }
 
-    await loadDialogs(myMemberId);
+    await loadMessages(activeId);
 
-    if (activeChatIdRef.current) {
-      await loadMessages(activeChatIdRef.current);
+    // Диалог открыт — входящие считаются прочитанными сразу, счётчик не копится.
+    const activeDialog = freshDialogs.find((dialog) => dialog.id === activeId);
+
+    if ((activeDialog?.unread ?? 0) > 0) {
+      await markRead(activeId);
     }
-  }, [loadDialogs, loadMessages, myMemberId]);
+  }, [loadDialogs, loadMessages, markRead]);
 
   useEffect(() => {
     const bootstrap = async () => {
       try {
-        if (!userId) {
-          return;
-        }
-
-        const result = await request<{ data: { workspaceMembers: WorkspaceMember[] } }>(
-          `/rest/workspaceMembers?filter=userId[eq]:${userId}&select=id,name&limit=1`,
-        );
-
-        const me = result.data.workspaceMembers?.[0];
-
-        if (!me) {
-          setError('Не нашёл вашу учётную запись в пространстве');
-
-          return;
-        }
-
-        setMyMemberId(me.id);
-
-        await Promise.all([loadMembers(), loadDialogs(me.id)]);
+        await loadDialogs();
       } catch (caughtError) {
         setError((caughtError as Error).message);
       } finally {
@@ -254,19 +185,15 @@ const ChatCenter = () => {
     };
 
     void bootstrap();
-  }, [loadDialogs, loadMembers, userId]);
+  }, [loadDialogs]);
 
   useEffect(() => {
-    if (!myMemberId) {
-      return;
-    }
-
     const timer = setInterval(() => {
       void refresh().catch((caughtError) => setError((caughtError as Error).message));
     }, 10000);
 
     return () => clearInterval(timer);
-  }, [myMemberId, refresh]);
+  }, [refresh]);
 
   useEffect(() => {
     if (!activeChatId) {
@@ -284,7 +211,7 @@ const ChatCenter = () => {
   const sendMessage = async () => {
     const text = draft.trim();
 
-    if (!text || !activeChatId || !myMemberId || isSending) {
+    if (!text || !activeChatId || isSending) {
       return;
     }
 
@@ -292,42 +219,10 @@ const ChatCenter = () => {
     setError(null);
 
     try {
-      await request('/rest/soobshcheniya', {
-        method: 'POST',
-        body: JSON.stringify({
-          chatId: activeChatId,
-          tekst: text,
-          avtorId: myMemberId,
-          napravlenie: 'ISHODYASHCHIE',
-          statusDostavki: 'DOSTAVLENO',
-        }),
-      });
-
-      await request(`/rest/chats/${activeChatId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          vremyaPoslednego: new Date().toISOString(),
-          posledneeSoobshchenie: text.slice(0, 120),
-        }),
-      });
-
-      const participantResult = await request<{
-        data: { chatParticipants: (Participant & { polzovatelId: string })[] };
-      }>(`/rest/chatParticipants?filter=chatId[eq]:${activeChatId}&select=id,polzovatelId,neprochitano&limit=60`);
-
-      for (const participant of participantResult.data.chatParticipants ?? []) {
-        if (participant.polzovatelId === myMemberId) {
-          continue;
-        }
-
-        await request(`/rest/chatParticipants/${participant.id}`, {
-          method: 'PATCH',
-          body: JSON.stringify({ neprochitano: (participant.neprochitano ?? 0) + 1 }),
-        });
-      }
+      await callRoute('/chat-send', { method: 'POST', body: { chatId: activeChatId, text } });
 
       setDraft('');
-      await Promise.all([loadMessages(activeChatId), loadDialogs(myMemberId)]);
+      await Promise.all([loadMessages(activeChatId), loadDialogs()]);
     } catch (caughtError) {
       setError((caughtError as Error).message);
     } finally {
@@ -335,11 +230,7 @@ const ChatCenter = () => {
     }
   };
 
-  const unreadByChat = new Map(
-    participants.map((participant) => [participant.chatId, participant.neprochitano ?? 0]),
-  );
-
-  const activeChat = chats.find((chat) => chat.id === activeChatId) ?? null;
+  const activeChat = dialogs.find((dialog) => dialog.id === activeChatId) ?? null;
 
   if (isLoading) {
     return <div style={{ padding: '24px', color: '#888' }}>Загружаю диалоги…</div>;
@@ -369,21 +260,36 @@ const ChatCenter = () => {
           Диалоги
         </div>
 
+        {error && (
+          <div
+            style={{
+              margin: '0 12px 8px',
+              padding: '6px 8px',
+              background: '#fdecea',
+              color: '#c03b2c',
+              fontSize: '11px',
+              borderRadius: '6px',
+              wordBreak: 'break-word',
+            }}
+          >
+            {error}
+          </div>
+        )}
+
         <div style={{ overflowY: 'auto', flex: 1 }}>
-          {chats.length === 0 && (
+          {dialogs.length === 0 && (
             <div style={{ padding: '16px', fontSize: '13px', color: '#999' }}>
               У вас пока нет диалогов
             </div>
           )}
 
-          {chats.map((chat) => {
-            const unread = unreadByChat.get(chat.id) ?? 0;
-            const isActive = chat.id === activeChatId;
+          {dialogs.map((dialog) => {
+            const isActive = dialog.id === activeChatId;
 
             return (
               <div
-                key={chat.id}
-                onClick={() => setActiveChatId(chat.id)}
+                key={dialog.id}
+                onClick={() => setActiveChatId(dialog.id)}
                 style={{
                   padding: '10px 16px',
                   cursor: 'pointer',
@@ -395,17 +301,17 @@ const ChatCenter = () => {
                   <span
                     style={{
                       fontSize: '13px',
-                      fontWeight: unread > 0 ? 600 : 500,
+                      fontWeight: dialog.unread > 0 ? 600 : 500,
                       flex: 1,
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    {chat.name || 'Без названия'}
+                    {dialog.name || 'Без названия'}
                   </span>
                   <span style={{ fontSize: '11px', color: '#aaa' }}>
-                    {formatDay(chat.vremyaPoslednego)}
+                    {formatDay(dialog.lastAt)}
                   </span>
                 </div>
 
@@ -420,10 +326,10 @@ const ChatCenter = () => {
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    {chat.posledneeSoobshchenie || `${TIP_LABEL[chat.tip] ?? 'Диалог'} · пусто`}
+                    {dialog.lastMessage || `${TIP_LABEL[dialog.tip ?? ''] ?? 'Диалог'} · пусто`}
                   </span>
 
-                  {unread > 0 && (
+                  {dialog.unread > 0 && (
                     <span
                       style={{
                         minWidth: '18px',
@@ -438,7 +344,7 @@ const ChatCenter = () => {
                         padding: '0 5px',
                       }}
                     >
-                      {unread}
+                      {dialog.unread}
                     </span>
                   )}
                 </div>
@@ -487,7 +393,7 @@ const ChatCenter = () => {
                   padding: '1px 8px',
                 }}
               >
-                {TIP_LABEL[activeChat.tip] ?? 'Диалог'}
+                {TIP_LABEL[activeChat.tip ?? ''] ?? 'Диалог'}
               </span>
             </div>
 
@@ -499,7 +405,7 @@ const ChatCenter = () => {
               )}
 
               {messages.map((message) => {
-                const isMine = message.avtorId === myMemberId;
+                const isMine = message.authorId === myMemberId;
 
                 return (
                   <div
@@ -519,8 +425,7 @@ const ChatCenter = () => {
                           marginBottom: '2px',
                         }}
                       >
-                        {isMine ? 'Вы' : members[message.avtorId ?? ''] ?? 'Сотрудник'} ·{' '}
-                        {formatTime(message.createdAt)}
+                        {isMine ? 'Вы' : message.authorName} · {formatTime(message.createdAt)}
                       </div>
                       <div
                         style={{
@@ -534,7 +439,7 @@ const ChatCenter = () => {
                           wordBreak: 'break-word',
                         }}
                       >
-                        {message.tekst}
+                        {message.text}
                       </div>
                     </div>
                   </div>

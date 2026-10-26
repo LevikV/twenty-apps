@@ -106,7 +106,9 @@ export const handleDealCreated = async (
   rawPayload: unknown,
 ): Promise<Record<string, unknown>> => {
   const settings = DEALS[kind];
-  const client = new RestApiClient();
+  // runAs: 'application' — комната создаётся и тогда, когда сделку завёл
+  // сотрудник без прав на кастомные объекты чата.
+  const client = new RestApiClient({ runAs: 'application' });
   const payload = (rawPayload ?? {}) as DbEventPayload;
   const dealId = payload.properties?.after?.id ?? payload.recordId;
 

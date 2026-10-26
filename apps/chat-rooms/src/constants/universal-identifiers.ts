@@ -10,6 +10,17 @@ export const MAIN_PAGE_WIDGET_UNIVERSAL_IDENTIFIER = 'e3c066e0-436f-48e8-9ac6-91
 export const MAIN_PAGE_NAVIGATION_MENU_ITEM_UNIVERSAL_IDENTIFIER =
   '9c4d65ab-d87f-45b7-af72-334dd33d81f8';
 
+// Логик-функции: маршруты «Центра коммуникации» (данные отдаёт приложение,
+// потому что у кастомных объектов чата нет прав у ролей сотрудников).
+export const CHAT_DIALOGS_FUNCTION_UNIVERSAL_IDENTIFIER =
+  '52f6d45f-bea3-45ac-81f9-68627009fd8f';
+export const CHAT_MESSAGES_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'c7d172f8-a8d6-45fa-9e5c-8c3e98ddf123';
+export const CHAT_SEND_FUNCTION_UNIVERSAL_IDENTIFIER =
+  '63fc3bb7-1340-47a5-a269-1ed01c9c5d09';
+export const CHAT_READ_FUNCTION_UNIVERSAL_IDENTIFIER =
+  '7e0c39ff-15c4-4be9-b6e6-44f31b93e9ac';
+
 // Логик-функции: комната чата на создание сделки (по одной на тип сделки).
 export const ROOM_OPPORTUNITY_FUNCTION_UNIVERSAL_IDENTIFIER =
   '33fe6059-d83e-4bec-a9e3-d246495c0693';
