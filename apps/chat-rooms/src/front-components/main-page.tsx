@@ -238,7 +238,6 @@ const ChatCenter = () => {
   const [mentionIndex, setMentionIndex] = useState(0);
   const [pendingMentions, setPendingMentions] = useState<MentionView[]>([]);
   const [initialChatId] = useState<string | null>(() => readChatIdFromUrl());
-  const [composerKey, setComposerKey] = useState(0);
 
   const activeChatIdRef = useRef<string | null>(null);
 
@@ -382,10 +381,6 @@ const ChatCenter = () => {
     setMentionQuery(null);
     setSuggestions([]);
     setMentionIndex(0);
-
-    // Клик по подсказке уводит фокус из поля (мост remote-dom гасит preventDefault).
-    // Пересоздаём textarea с autoFocus — фокус возвращается, курсор встаёт в конец.
-    setComposerKey((previous) => previous + 1);
 
     setPendingMentions((previous) => {
       const key = `${suggestion.type}:${suggestion.id}`;
@@ -714,9 +709,8 @@ const ChatCenter = () => {
               )}
 
               <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end' }}>
-                <textarea
-                  key={composerKey}
-                  autoFocus={composerKey > 0}
+                <input
+                  type="text"
                   value={draft}
                   onChange={(event) => {
                     const value = event.target.value;
@@ -764,7 +758,6 @@ const ChatCenter = () => {
                     }
                   }}
                   placeholder="Написать сообщение… (@ — упомянуть)"
-                  rows={2}
                   style={{
                     flex: 1,
                     resize: 'none',
