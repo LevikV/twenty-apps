@@ -265,10 +265,10 @@ export class RecordRoomService {
   /**
    * Кого подтягиваем в комнату при создании.
    *
-   * Только те, кого назначили осознанно: соисполнители и наблюдатели из связки
-   * «Участник записи», мастер ремонта. Ответственный, исполнитель и автор записи
-   * в комнату НЕ тянутся (решение 26.10.2026) — они прочитают её из карточки,
-   * а участниками станут, если сами напишут.
+   * Только те, кого назначили осознанно: ответственный (Заказ/Ремонт) или
+   * исполнитель (Задача), мастер ремонта, соисполнители и наблюдатели из связки
+   * «Участник записи». Автор записи в комнату НЕ тянется (решение 26.10.2026):
+   * он прочитает её из карточки, а участником станет, если сам напишет.
    */
   private async collectParticipants(
     kind: RecordKind,
@@ -286,6 +286,14 @@ export class RecordRoomService {
         result.push({ memberId, rol });
       }
     };
+
+    if (kind.ownerField) {
+      const owner = asString(record[kind.ownerField]);
+
+      if (owner) {
+        push(kind.ownerIsMember ? owner : await this.memberIdBySotrudnik(owner), 'UCHASTNIK');
+      }
+    }
 
     if (kind.masterField) {
       const master = asString(record[kind.masterField]);
