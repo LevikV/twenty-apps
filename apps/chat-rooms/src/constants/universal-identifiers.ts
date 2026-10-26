@@ -20,6 +20,8 @@ export const CHAT_SEND_FUNCTION_UNIVERSAL_IDENTIFIER =
   '63fc3bb7-1340-47a5-a269-1ed01c9c5d09';
 export const CHAT_READ_FUNCTION_UNIVERSAL_IDENTIFIER =
   '7e0c39ff-15c4-4be9-b6e6-44f31b93e9ac';
+export const CHAT_MENTION_SEARCH_FUNCTION_UNIVERSAL_IDENTIFIER =
+  '3efc95c3-bb07-4853-870a-b26ff630a15e';
 
 // Логик-функции: комната чата на создание сделки (по одной на тип сделки).
 export const ROOM_OPPORTUNITY_FUNCTION_UNIVERSAL_IDENTIFIER =
