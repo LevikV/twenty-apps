@@ -15,9 +15,9 @@ export default definePageLayout({
   tabs: [
     {
       universalIdentifier: MAIN_PAGE_LAYOUT_TAB_UNIVERSAL_IDENTIFIER,
-      title: 'Overview',
+      title: 'Диалоги',
       position: 0,
-      icon: 'IconApps',
+      icon: 'IconMessages',
       layoutMode: PageLayoutTabLayoutMode.VERTICAL_LIST,
       widgets: [
         {

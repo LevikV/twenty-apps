@@ -12,7 +12,7 @@ import {
 export default defineNavigationMenuItem({
   universalIdentifier: MAIN_PAGE_NAVIGATION_MENU_ITEM_UNIVERSAL_IDENTIFIER,
   name: APP_DISPLAY_NAME,
-  icon: 'IconFile',
+  icon: 'IconMessages',
   position: -1,
   type: NavigationMenuItemType.PAGE_LAYOUT,
   pageLayoutUniversalIdentifier: MAIN_PAGE_LAYOUT_UNIVERSAL_IDENTIFIER,
