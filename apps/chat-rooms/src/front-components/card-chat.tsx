@@ -8,8 +8,12 @@ import { CARD_CHAT_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/un
  * Чат в карточке записи (Заказ, Ремонт, Тендер, Заправка, Задача).
  *
  * Комната создаётся при первой отправке: до этого показываем приглашение.
- * Читать и писать может любой, у кого есть доступ к записи; написавший
- * становится участником. Участников набирает сервер (`chat-record-send`).
+ * Участников набирает сервер (`chat-record-send`).
+ *
+ * Упоминания: `@` в поле ввода открывает подсказку (поиск на сервере,
+ * `/chat-mention-search`). Кого отметили — получает уведомление и становится
+ * участником комнаты. Каретку в поле хоста сдвинуть нельзя (ограничение
+ * песочницы, см. plan.md §11) — поэтому после вставки курсор остаётся как есть.
  */
 
 type Message = {
@@ -17,6 +21,15 @@ type Message = {
   text: string | null;
   createdAt: string;
   authorName: string;
+};
+
+type MentionView = { type: string; id: string; label: string };
+
+type MentionSuggestion = {
+  type: string;
+  id: string;
+  label: string;
+  subtitle: string;
 };
 
 type RoomState = {
@@ -77,6 +90,36 @@ const formatTime = (iso: string): string =>
     minute: '2-digit',
   });
 
+/** Подсветка упоминаний в ленте: «@Подпись» рисуем синим. */
+const renderText = (text: string | null) => {
+  if (!text) {
+    return '';
+  }
+
+  const pattern = /@[\wА-Яа-яЁё\-\s]+?(?=\s|$)/g;
+  const parts = text.split(pattern);
+  const matches = text.match(pattern) ?? [];
+
+  if (matches.length === 0) {
+    return text;
+  }
+
+  return parts.flatMap((part, index) => {
+    const mention = matches[index];
+
+    if (!mention) {
+      return [part];
+    }
+
+    return [
+      part,
+      <span key={`m-${index}`} style={{ color: '#1961ff', fontWeight: 600 }}>
+        {mention}
+      </span>,
+    ];
+  });
+};
+
 export const CardChat = () => {
   const recordIds = useSelectedRecordIds();
   const recordId = recordIds.length === 1 ? recordIds[0] : null;
@@ -85,6 +128,13 @@ export const CardChat = () => {
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
+
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionStart, setMentionStart] = useState<number>(-1);
+  const [suggestions, setSuggestions] = useState<MentionSuggestion[]>([]);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [pendingMentions, setPendingMentions] = useState<MentionView[]>([]);
+
   const draftRef = useRef(draft);
 
   draftRef.current = draft;
@@ -118,6 +168,82 @@ export const CardChat = () => {
     return () => clearInterval(timer);
   }, [reload]);
 
+  const updateMentionState = (value: string) => {
+    const atIndex = value.lastIndexOf('@');
+
+    if (atIndex === -1) {
+      setMentionQuery(null);
+      setSuggestions([]);
+
+      return;
+    }
+
+    const tail = value.slice(atIndex + 1);
+
+    if (tail.length > 40 || /\s/.test(tail) || tail.includes(']') || tail.includes('(')) {
+      setMentionQuery(null);
+      setSuggestions([]);
+
+      return;
+    }
+
+    setMentionStart(atIndex);
+    setMentionQuery(tail);
+    setMentionIndex(0);
+  };
+
+  useEffect(() => {
+    if (mentionQuery === null || mentionQuery.trim().length < 2) {
+      setSuggestions([]);
+
+      return;
+    }
+
+    let cancelled = false;
+
+    const timer = setTimeout(() => {
+      callRoute<{ suggestions: MentionSuggestion[] }>(
+        `/chat-mention-search?q=${encodeURIComponent(mentionQuery.trim())}`,
+      )
+        .then((response) => {
+          if (!cancelled) {
+            setSuggestions(response.suggestions ?? []);
+            setMentionIndex(0);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setSuggestions([]);
+          }
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [mentionQuery]);
+
+  const insertMention = (suggestion: MentionSuggestion) => {
+    if (mentionStart < 0) {
+      return;
+    }
+
+    const before = draft.slice(0, mentionStart);
+    const after = draft.slice(mentionStart + 1 + (mentionQuery?.length ?? 0));
+    const value = `${before}@${suggestion.label} ${after}`;
+
+    setDraft(value);
+    setMentionQuery(null);
+    setSuggestions([]);
+    setMentionIndex(0);
+    setPendingMentions((previous) =>
+      previous.some((item) => item.type === suggestion.type && item.id === suggestion.id)
+        ? previous
+        : [...previous, { type: suggestion.type, id: suggestion.id, label: suggestion.label }],
+    );
+  };
+
   const send = async () => {
     const text = draft.trim();
 
@@ -131,9 +257,12 @@ export const CardChat = () => {
     try {
       await callRoute('/chat-record-send', {
         method: 'POST',
-        body: { recordId, text },
+        body: { recordId, text, mentions: pendingMentions },
       });
       setDraft('');
+      setPendingMentions([]);
+      setMentionQuery(null);
+      setSuggestions([]);
       await reload();
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : String(sendError));
@@ -149,6 +278,8 @@ export const CardChat = () => {
       </div>
     );
   }
+
+  const popupOpen = mentionQuery !== null && suggestions.length > 0;
 
   return (
     <div
@@ -206,13 +337,51 @@ export const CardChat = () => {
                 wordBreak: 'break-word',
               }}
             >
-              {message.text}
+              {renderText(message.text)}
             </div>
           </div>
         ))}
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', position: 'relative' }}>
+        {popupOpen && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: '100%',
+              left: 0,
+              right: 0,
+              marginBottom: '4px',
+              maxHeight: '220px',
+              overflowY: 'auto',
+              background: '#fff',
+              border: '1px solid #d6d6d6',
+              borderRadius: '8px',
+              boxShadow: '0 6px 18px rgba(0,0,0,0.12)',
+              zIndex: 50,
+            }}
+          >
+            {suggestions.map((suggestion, index) => (
+              <div
+                key={`${suggestion.type}:${suggestion.id}`}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  insertMention(suggestion);
+                }}
+                style={{
+                  padding: '7px 10px',
+                  cursor: 'pointer',
+                  background: index === mentionIndex ? '#eef3ff' : 'transparent',
+                  fontSize: '13px',
+                }}
+              >
+                <div>{suggestion.label}</div>
+                <div style={{ fontSize: '11px', color: '#8b8b8b' }}>{suggestion.subtitle}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {room?.chatId && !room.member && (
           <div style={{ fontSize: '11px', color: '#8b8b8b' }}>
             Вы читаете обсуждение, но не участник — напишите, и будете получать уведомления.
@@ -221,14 +390,49 @@ export const CardChat = () => {
 
         <textarea
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            updateMentionState(event.target.value);
+          }}
           onKeyDown={(event) => {
+            if (popupOpen) {
+              if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                setMentionIndex((previous) => (previous + 1) % suggestions.length);
+
+                return;
+              }
+
+              if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                setMentionIndex(
+                  (previous) => (previous - 1 + suggestions.length) % suggestions.length,
+                );
+
+                return;
+              }
+
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                insertMention(suggestions[mentionIndex]);
+
+                return;
+              }
+
+              if (event.key === 'Escape') {
+                setMentionQuery(null);
+                setSuggestions([]);
+
+                return;
+              }
+            }
+
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
               void send();
             }
           }}
-          placeholder="Написать в обсуждение… (Enter — отправить)"
+          placeholder="Написать в обсуждение… (Enter — отправить, @ — упомянуть)"
           rows={2}
           style={{
             width: '100%',
