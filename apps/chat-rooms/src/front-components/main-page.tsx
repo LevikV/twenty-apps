@@ -244,11 +244,7 @@ const ChatCenter = () => {
   activeChatIdRef.current = activeChatId;
 
   const loadDialogs = useCallback(async () => {
-    const diag = typeof location === 'undefined' ? 'no-location' : location.href;
-
-    const result = await callRoute<DialogsResponse>(
-      `/chat-dialogs?diag=${encodeURIComponent(diag)}`,
-    );
+    const result = await callRoute<DialogsResponse>('/chat-dialogs');
     const freshDialogs = result.dialogs ?? [];
 
     setMyMemberId(result.me);
@@ -295,10 +291,26 @@ const ChatCenter = () => {
     const bootstrap = async () => {
       try {
         const freshDialogs = await loadDialogs();
+        const exists = (chatId: string | null) =>
+          !!chatId && freshDialogs.some((dialog) => dialog.id === chatId);
 
-        // Пришли по уведомлению — сразу открываем нужный диалог.
-        if (initialChatId && freshDialogs.some((dialog) => dialog.id === initialChatId)) {
-          setActiveChatId(initialChatId);
+        // Адрес страницы до компонента не доходит (блоб-iframe), поэтому пришли ли
+        // мы по уведомлению — спрашиваем сервер. Ошибку запроса сюда не пускаем:
+        // страница должна открыться даже если подсказка недоступна.
+        let target: string | null = exists(initialChatId) ? initialChatId : null;
+
+        if (!target) {
+          try {
+            const hint = await callRoute<{ chatId: string | null }>('/chat-open-target');
+
+            target = exists(hint.chatId) ? hint.chatId : null;
+          } catch {
+            target = null;
+          }
+        }
+
+        if (target) {
+          setActiveChatId(target);
         }
       } catch (caughtError) {
         setError((caughtError as Error).message);

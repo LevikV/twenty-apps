@@ -426,6 +426,53 @@ export class ChatService {
     }
   }
 
+  /**
+   * Диалог, который нужно открыть по переходу из уведомления.
+   *
+   * Внутри фронт-компонента адрес страницы недоступен (он живёт в блоб-iframe),
+   * поэтому цель берём на сервере: последнее непрочитанное уведомление со ссылкой
+   * на страницу, в котором лежит id диалога (`<pageId>|<chatId>`), не старше 10 минут.
+   */
+  async openTarget(memberId: string): Promise<{ chatId: string | null }> {
+    const response = await this.client.get<unknown>('/rest/uvedomleniya', {
+      query: {
+        filter: `poluchatelId[eq]:"${memberId}"`,
+        select: 'id,linkedObjectName,linkedRecordId,createdAt,prochitano',
+        limit: 10,
+      },
+    });
+
+    // Важно: колокольчик помечает уведомление прочитанным ДО того, как страница
+    // откроется, поэтому на признак «прочитано» не опираемся — только на свежесть.
+    const rows = rowsOf(response, 'uvedomleniya').sort((left, right) =>
+      String(right.createdAt ?? '').localeCompare(String(left.createdAt ?? '')),
+    );
+
+    for (const row of rows) {
+      if (asString(row.linkedObjectName) !== 'page') {
+        continue;
+      }
+
+      const recordId = asString(row.linkedRecordId) ?? '';
+      const [, chatId] = recordId.split('|');
+
+      if (!chatId) {
+        continue;
+      }
+
+      const createdAt = Date.parse(String(row.createdAt ?? ''));
+
+      // Старое уведомление не должно перехватывать открытие страницы из меню.
+      if (!Number.isNaN(createdAt) && Date.now() - createdAt > 10 * 60 * 1000) {
+        continue;
+      }
+
+      return { chatId };
+    }
+
+    return { chatId: null };
+  }
+
   async markRead(memberId: string, chatId: string): Promise<void> {
     const participations = await this.myParticipations(memberId);
     const mine = participations.find((participant) => asString(participant.chatId) === chatId);
