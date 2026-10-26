@@ -201,6 +201,7 @@ const TIP_LABEL: Record<string, string> = {
   KLIENT: 'Клиент',
   SDELKA: 'Сделка',
   LICHNY: 'Личный',
+  ZADACHA: 'Задача',
 };
 
 /**

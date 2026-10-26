@@ -4,8 +4,9 @@ import { RestApiClient } from 'twenty-client-sdk/rest';
 /**
  * Комната чата по сделке.
  *
- * На создание сделки любого из четырёх типов заводим один диалог вида «Чат по сделке»,
- * связку диалога со сделкой (морф-поле) и участников — всех, у кого есть учётная запись.
+ * На создание Заказа/Ремонта/Тендера/Заправки/Задачи заводим один диалог
+ * («Чат по сделке» или «Чат по задаче»), связку диалога с записью и участников —
+ * всех, у кого есть учётная запись.
  *
  * Идемпотентность: перед созданием ищем связку по конкретной ноге морф-поля.
  * Повторный вызов (повторная доставка события) вернёт `skipped` и ничего не задвоит.
@@ -15,13 +16,15 @@ export type DealKind =
   | 'opportunity'
   | 'remontOborudovaniya'
   | 'tender'
-  | 'zapravkaKartridzhey';
+  | 'zapravkaKartridzhey'
+  | 'task';
 
 type DealSettings = {
   path: string;
   key: string;
   label: string;
   targetField: string;
+  tip: string;
 };
 
 const DEALS: Record<DealKind, DealSettings> = {
@@ -30,31 +33,42 @@ const DEALS: Record<DealKind, DealSettings> = {
     key: 'opportunities',
     label: 'Заказ',
     targetField: 'sdelkaOpportunityId',
+    tip: 'SDELKA',
   },
   remontOborudovaniya: {
     path: '/rest/remontOborudovaniyas',
     key: 'remontOborudovaniyas',
     label: 'Ремонт',
     targetField: 'sdelkaRemontOborudovaniyaId',
+    tip: 'SDELKA',
   },
   tender: {
     path: '/rest/tendery',
     key: 'tendery',
     label: 'Тендер',
     targetField: 'sdelkaTenderId',
+    tip: 'SDELKA',
   },
   zapravkaKartridzhey: {
     path: '/rest/zapravkaKartridzheys',
     key: 'zapravkaKartridzheys',
     label: 'Заправка',
     targetField: 'sdelkaZapravkaKartridzheyId',
+    tip: 'SDELKA',
+  },
+  task: {
+    path: '/rest/tasks',
+    key: 'tasks',
+    label: 'Задача',
+    targetField: 'zadachaId',
+    tip: 'ZADACHA',
   },
 };
 
 type DbEventPayload = {
   recordId?: string;
   properties?: {
-    after?: { id?: string; name?: string | null };
+    after?: { id?: string; name?: string | null; title?: string | null };
     before?: { id?: string; name?: string | null };
   };
 };
@@ -145,12 +159,16 @@ export const handleDealCreated = async (
     }
 
     // 2. Название сделки: из события, иначе читаем карточку.
-    let dealName = String(payload.properties?.after?.name ?? '').trim();
+    // У задач название лежит в `title`, у сделок — в `name`.
+    let dealName = String(
+      payload.properties?.after?.name ?? payload.properties?.after?.title ?? '',
+    ).trim();
 
     if (!dealName) {
       const dealResponse = await client.get<unknown>(`${settings.path}/${dealId}`);
+      const record = pickCreated(dealResponse);
 
-      dealName = String(pickCreated(dealResponse)?.name ?? '').trim();
+      dealName = String(record?.name ?? record?.title ?? '').trim();
     }
 
     const title = `${settings.label} ${dealName}`.trim();
@@ -160,7 +178,7 @@ export const handleDealCreated = async (
       await client.post<unknown>('/rest/chats', {
         name: title,
         nazvanie: title,
-        tip: 'SDELKA',
+        tip: settings.tip,
         kanal: 'VNUTRENNIY',
         status: 'OTKRYT',
       }),
