@@ -237,6 +237,7 @@ const ChatCenter = () => {
   const [suggestions, setSuggestions] = useState<MentionSuggestion[]>([]);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [pendingMentions, setPendingMentions] = useState<MentionView[]>([]);
+  const [caretTarget, setCaretTarget] = useState<number | null>(null);
   const [initialChatId] = useState<string | null>(() => readChatIdFromUrl());
 
   const activeChatIdRef = useRef<string | null>(null);
@@ -381,6 +382,7 @@ const ChatCenter = () => {
   const applyDraft = (value: string, caret: number) => {
     suppressRef.current = { until: Date.now() + 500, expected: value, caret };
     setDraft(value);
+    setCaretTarget(caret);
 
     caretSeqRef.current += 1;
 
@@ -399,18 +401,18 @@ const ChatCenter = () => {
       }
 
       try {
-        if (node.value !== value) {
-          node.value = value;
+        // Пишем без сравнений: чтение из моста может возвращать не состояние хоста.
+        node.value = value;
+
+        if (typeof node.setSelectionRange === 'function') {
+          node.setSelectionRange(caret, caret);
         }
 
-        if (node.selectionStart !== caret || node.selectionEnd !== caret) {
-          node.selectionStart = caret;
-          node.selectionEnd = caret;
-        }
-
+        node.selectionStart = caret;
+        node.selectionEnd = caret;
         node.focus?.();
       } catch {
-        // песочница не даёт доступа к узлу — остаётся значение из состояния
+        // песочница не даёт доступа к узлу
       }
 
       return true;
@@ -419,10 +421,10 @@ const ChatCenter = () => {
     const timer = setInterval(() => {
       attempts += 1;
 
-      if (!write() || attempts >= 12) {
+      if (!write() || attempts >= 25) {
         clearInterval(timer);
       }
-    }, 80);
+    }, 100);
   };
 
   const renderHighlightedDraft = () => {
@@ -890,6 +892,7 @@ const ChatCenter = () => {
                       }
                     }}
                     placeholder="Написать сообщение… (@ — упомянуть, Ctrl+Enter — отправить)"
+                    {...({ selectionStart: caretTarget ?? undefined, selectionEnd: caretTarget ?? undefined } as any)}
                     rows={3}
                     style={{
                       position: 'relative',
