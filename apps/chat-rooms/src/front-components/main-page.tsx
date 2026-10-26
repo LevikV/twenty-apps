@@ -399,6 +399,30 @@ const ChatCenter = () => {
     setTimeout(write, 150);
   };
 
+  const renderHighlightedDraft = () => {
+    if (pendingMentions.length === 0 || draft.length === 0) {
+      return draft;
+    }
+
+    const labels = pendingMentions.map((mention) => `@${mention.label}`).sort(
+      (left, right) => right.length - left.length,
+    );
+    const pattern = new RegExp(
+      `(${labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`,
+      'g',
+    );
+
+    return draft.split(pattern).map((part, index) =>
+      labels.includes(part) ? (
+        <span key={index} style={{ color: '#1961ff', fontWeight: 600 }}>
+          {part}
+        </span>
+      ) : (
+        <span key={index}>{part}</span>
+      ),
+    );
+  };
+
   const insertMention = (suggestion: MentionSuggestion) => {
     if (mentionStart < 0) {
       return;
@@ -407,7 +431,8 @@ const ChatCenter = () => {
     const before = draft.slice(0, mentionStart);
     const after = draft.slice(mentionStart + 1 + (mentionQuery?.length ?? 0));
     const inserted = `${before}@${suggestion.label} ${after}`;
-    const caret = before.length + 1 + suggestion.label.length + 1;
+    // Курсор после выбора — в конец текста, а не сразу за вставленной ссылкой.
+    const caret = inserted.length;
 
     applyDraft(inserted, caret);
 
@@ -741,88 +766,120 @@ const ChatCenter = () => {
               )}
 
               <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end' }}>
-                <textarea
-                  ref={composerRef}
-                  value={draft}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    const guard = suppressRef.current;
+                <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                  {/* Слой подсветки: в поле ввода нельзя красить части текста,
+                      поэтому под прозрачным текстом рисуем тот же текст с акцентом. */}
+                  <div
+                    aria-hidden
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      boxSizing: 'border-box',
+                      border: '1px solid transparent',
+                      borderRadius: '8px',
+                      padding: '8px 10px',
+                      fontSize: '13px',
+                      fontFamily: 'inherit',
+                      lineHeight: '18px',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      color: '#333',
+                      overflow: 'hidden',
+                      pointerEvents: 'none',
+                    }}
+                  >
+                    {renderHighlightedDraft()}
+                  </div>
 
-                    // Хост применил своё действие (например, перевод строки на Enter)
-                    // раньше нашего — возвращаем вставленный текст и каретку.
-                    if (guard && Date.now() < guard.until && value !== guard.expected) {
-                      const node = composerRef.current;
+                  <textarea
+                    ref={composerRef}
+                    value={draft}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      const guard = suppressRef.current;
 
-                      try {
-                        if (node) {
-                          node.value = guard.expected;
-                          node.selectionStart = guard.caret;
-                          node.selectionEnd = guard.caret;
+                      // Хост применил своё действие (например, перевод строки на Enter)
+                      // раньше нашего — возвращаем вставленный текст и каретку.
+                      if (guard && Date.now() < guard.until && value !== guard.expected) {
+                        const node = composerRef.current;
+
+                        try {
+                          if (node) {
+                            node.value = guard.expected;
+                            node.selectionStart = guard.caret;
+                            node.selectionEnd = guard.caret;
+                          }
+                        } catch {
+                          // нет доступа к узлу
                         }
-                      } catch {
-                        // нет доступа к узлу
-                      }
-
-                      return;
-                    }
-
-                    suppressRef.current = null;
-                    setDraft(value);
-                    updateMentionState(value);
-                  }}
-                  onKeyDown={(event) => {
-                    if (mentionQuery !== null && suggestions.length > 0) {
-                      if (event.key === 'ArrowDown') {
-                        event.preventDefault();
-                        setMentionIndex((previous) => (previous + 1) % suggestions.length);
 
                         return;
                       }
 
-                      if (event.key === 'ArrowUp') {
-                        event.preventDefault();
-                        setMentionIndex(
-                          (previous) =>
-                            (previous - 1 + suggestions.length) % suggestions.length,
-                        );
+                      suppressRef.current = null;
+                      setDraft(value);
+                      updateMentionState(value);
+                    }}
+                    onKeyDown={(event) => {
+                      if (mentionQuery !== null && suggestions.length > 0) {
+                        if (event.key === 'ArrowDown') {
+                          event.preventDefault();
+                          setMentionIndex((previous) => (previous + 1) % suggestions.length);
 
-                        return;
+                          return;
+                        }
+
+                        if (event.key === 'ArrowUp') {
+                          event.preventDefault();
+                          setMentionIndex(
+                            (previous) =>
+                              (previous - 1 + suggestions.length) % suggestions.length,
+                          );
+
+                          return;
+                        }
+
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          insertMention(suggestions[mentionIndex]);
+
+                          return;
+                        }
+
+                        if (event.key === 'Escape') {
+                          event.preventDefault();
+                          setMentionQuery(null);
+                          setSuggestions([]);
+
+                          return;
+                        }
                       }
 
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                        insertMention(suggestions[mentionIndex]);
-
-                        return;
+                      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                        void sendMessage();
                       }
-
-                      if (event.key === 'Escape') {
-                        event.preventDefault();
-                        setMentionQuery(null);
-                        setSuggestions([]);
-
-                        return;
-                      }
-                    }
-
-                    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-                      void sendMessage();
-                    }
-                  }}
-                  placeholder="Написать сообщение… (@ — упомянуть, Ctrl+Enter — отправить)"
-                  rows={3}
-                  style={{
-                    flex: 1,
-                    resize: 'vertical',
-                    minHeight: '64px',
-                    border: '1px solid #e0e0e0',
-                    borderRadius: '8px',
-                    padding: '8px 10px',
-                    fontSize: '13px',
-                    fontFamily: 'inherit',
-                    outline: 'none',
-                  }}
-                />
+                    }}
+                    placeholder="Написать сообщение… (@ — упомянуть, Ctrl+Enter — отправить)"
+                    rows={3}
+                    style={{
+                      position: 'relative',
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      resize: 'vertical',
+                      minHeight: '64px',
+                      background: 'transparent',
+                      color: 'transparent',
+                      caretColor: '#333',
+                      border: '1px solid #e0e0e0',
+                      borderRadius: '8px',
+                      padding: '8px 10px',
+                      fontSize: '13px',
+                      fontFamily: 'inherit',
+                      lineHeight: '18px',
+                      outline: 'none',
+                    }}
+                  />
+                </div>
 
                 <button
                   onClick={() => void sendMessage()}
