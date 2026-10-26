@@ -232,8 +232,8 @@ const ChatCenter = () => {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
-  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
-  const [mentionStart, setMentionStart] = useState<number>(-1);
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [pickerQuery, setPickerQuery] = useState('');
   const [suggestions, setSuggestions] = useState<MentionSuggestion[]>([]);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [pendingMentions, setPendingMentions] = useState<MentionView[]>([]);
@@ -343,45 +343,11 @@ const ChatCenter = () => {
     void markRead(activeChatId).catch(() => undefined);
   }, [activeChatId, loadMessages, markRead]);
 
-  const updateMentionState = (value: string) => {
-    const atIndex = value.lastIndexOf('@');
-
-    if (atIndex === -1) {
-      setMentionQuery(null);
-      setSuggestions([]);
-
-      return;
-    }
-
-    const tail = value.slice(atIndex + 1);
-
-    if (tail.length > 40 || /\s/.test(tail) || tail.includes(']') || tail.includes('(')) {
-      setMentionQuery(null);
-      setSuggestions([]);
-
-      return;
-    }
-
-    setMentionStart(atIndex);
-    setMentionQuery(tail);
-    setMentionIndex(0);
-  };
-
-  const insertMention = (suggestion: MentionSuggestion) => {
-    if (mentionStart < 0) {
-      return;
-    }
-
-    const before = draft.slice(0, mentionStart);
-    const after = draft.slice(mentionStart + 1 + (mentionQuery?.length ?? 0));
-
-    // В поле ввода — обычный текст «@Подпись»; привязка к записи живёт в состоянии
-    // и уходит на сервер вместе с сообщением.
-    setDraft(`${before}@${suggestion.label} ${after}`);
-    setMentionQuery(null);
-    setSuggestions([]);
-    setMentionIndex(0);
-
+  // Упоминание — чип у сообщения, а не текст внутри поля ввода. Поле остаётся
+  // обычным многострочным и никогда не переписывается программно: в песочнице
+  // компонента нельзя ни вернуть фокус, ни поставить курсор (мост remote-dom
+  // отдаёт ввод хосту), поэтому любая подмена текста ломает каретку.
+  const addMention = (suggestion: MentionSuggestion) => {
     setPendingMentions((previous) => {
       const key = `${suggestion.type}:${suggestion.id}`;
 
@@ -394,10 +360,21 @@ const ChatCenter = () => {
         { type: suggestion.type, id: suggestion.id, label: suggestion.label },
       ];
     });
+
+    setIsPickerOpen(false);
+    setPickerQuery('');
+    setSuggestions([]);
+    setMentionIndex(0);
+  };
+
+  const removeMention = (mention: MentionView) => {
+    setPendingMentions((previous) =>
+      previous.filter((item) => !(item.type === mention.type && item.id === mention.id)),
+    );
   };
 
   useEffect(() => {
-    if (mentionQuery === null || mentionQuery.trim().length < 2) {
+    if (!isPickerOpen || pickerQuery.trim().length < 2) {
       setSuggestions([]);
 
       return;
@@ -407,7 +384,7 @@ const ChatCenter = () => {
 
     const timer = setTimeout(() => {
       callRoute<{ suggestions: MentionSuggestion[] }>(
-        `/chat-mention-search?q=${encodeURIComponent(mentionQuery.trim())}`,
+        `/chat-mention-search?q=${encodeURIComponent(pickerQuery.trim())}`,
       )
         .then((result) => {
           if (!cancelled) {
@@ -426,7 +403,7 @@ const ChatCenter = () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [mentionQuery]);
+  }, [isPickerOpen, pickerQuery]);
 
   const sendMessage = async () => {
     const text = draft.trim();
@@ -678,89 +655,157 @@ const ChatCenter = () => {
             )}
 
             <div style={{ borderTop: '1px solid #e8e8e8', padding: '12px 20px' }}>
-              {mentionQuery !== null && suggestions.length > 0 && (
+              {pendingMentions.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+                  {pendingMentions.map((mention) => (
+                    <span
+                      key={`${mention.type}:${mention.id}`}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        background: '#eef3ff',
+                        border: '1px solid #c9d6ff',
+                        borderRadius: '12px',
+                        padding: '2px 8px',
+                        fontSize: '12px',
+                        color: '#1961ff',
+                      }}
+                    >
+                      @{mention.label}
+                      <span
+                        onClick={() => removeMention(mention)}
+                        style={{ cursor: 'pointer', color: '#7a8aa8', fontWeight: 600 }}
+                      >
+                        ×
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {isPickerOpen && (
                 <div
                   style={{
                     marginBottom: '8px',
                     border: '1px solid #e0e0e0',
                     borderRadius: '8px',
-                    maxHeight: '220px',
-                    overflowY: 'auto',
                     background: '#fff',
+                    overflow: 'hidden',
                   }}
                 >
-                  {suggestions.map((suggestion, index) => (
-                    <div
-                      key={`${suggestion.type}-${suggestion.id}`}
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => insertMention(suggestion)}
-                      style={{
-                        padding: '6px 10px',
-                        cursor: 'pointer',
-                        background: index === mentionIndex ? '#eef3ff' : 'transparent',
-                        borderBottom: '1px solid #f4f4f4',
-                      }}
-                    >
-                      <div style={{ fontSize: '13px', fontWeight: 500 }}>{suggestion.label}</div>
-                      <div style={{ fontSize: '11px', color: '#999' }}>{suggestion.subtitle}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
+                  <input
+                    type="text"
+                    value={pickerQuery}
+                    onChange={(event) => setPickerQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (suggestions.length > 0) {
+                        if (event.key === 'ArrowDown') {
+                          setMentionIndex((previous) => (previous + 1) % suggestions.length);
 
-              <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end' }}>
-                <input
-                  type="text"
-                  value={draft}
-                  onChange={(event) => {
-                    const value = event.target.value;
+                          return;
+                        }
 
-                    setDraft(value);
-                    updateMentionState(value);
-                  }}
-                  onKeyDown={(event) => {
-                    if (mentionQuery !== null && suggestions.length > 0) {
-                      if (event.key === 'ArrowDown') {
-                        event.preventDefault();
-                        setMentionIndex((previous) => (previous + 1) % suggestions.length);
+                        if (event.key === 'ArrowUp') {
+                          setMentionIndex(
+                            (previous) =>
+                              (previous - 1 + suggestions.length) % suggestions.length,
+                          );
 
-                        return;
-                      }
+                          return;
+                        }
 
-                      if (event.key === 'ArrowUp') {
-                        event.preventDefault();
-                        setMentionIndex(
-                          (previous) => (previous - 1 + suggestions.length) % suggestions.length,
-                        );
+                        if (event.key === 'Enter') {
+                          addMention(suggestions[mentionIndex]);
 
-                        return;
-                      }
-
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                        insertMention(suggestions[mentionIndex]);
-
-                        return;
+                          return;
+                        }
                       }
 
                       if (event.key === 'Escape') {
-                        event.preventDefault();
-                        setMentionQuery(null);
+                        setIsPickerOpen(false);
+                        setPickerQuery('');
                         setSuggestions([]);
-
-                        return;
                       }
-                    }
+                    }}
+                    placeholder="Кого или что упомянуть — имя, компания, сделка…"
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      border: 'none',
+                      borderBottom: '1px solid #eee',
+                      padding: '8px 10px',
+                      fontSize: '13px',
+                      fontFamily: 'inherit',
+                      outline: 'none',
+                    }}
+                  />
 
-                    if (event.key === 'Enter' && !event.shiftKey) {
-                      event.preventDefault();
+                  <div style={{ maxHeight: '220px', overflowY: 'auto' }}>
+                    {suggestions.length === 0 && (
+                      <div style={{ padding: '8px 10px', fontSize: '12px', color: '#999' }}>
+                        {pickerQuery.trim().length < 2
+                          ? 'Начните вводить имя'
+                          : 'Ничего не найдено'}
+                      </div>
+                    )}
+
+                    {suggestions.map((suggestion, index) => (
+                      <div
+                        key={`${suggestion.type}-${suggestion.id}`}
+                        onClick={() => addMention(suggestion)}
+                        style={{
+                          padding: '6px 10px',
+                          cursor: 'pointer',
+                          background: index === mentionIndex ? '#eef3ff' : 'transparent',
+                          borderBottom: '1px solid #f4f4f4',
+                        }}
+                      >
+                        <div style={{ fontSize: '13px', fontWeight: 500 }}>{suggestion.label}</div>
+                        <div style={{ fontSize: '11px', color: '#999' }}>{suggestion.subtitle}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+                <button
+                  onClick={() => {
+                    setIsPickerOpen(!isPickerOpen);
+                    setPickerQuery('');
+                    setSuggestions([]);
+                    setMentionIndex(0);
+                  }}
+                  title="Упомянуть"
+                  style={{
+                    background: isPickerOpen ? '#eef3ff' : '#f4f4f4',
+                    color: '#1961ff',
+                    border: '1px solid #e0e0e0',
+                    borderRadius: '8px',
+                    padding: '9px 12px',
+                    fontSize: '14px',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  @
+                </button>
+
+                <textarea
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
                       void sendMessage();
                     }
                   }}
-                  placeholder="Написать сообщение… (@ — упомянуть)"
+                  placeholder="Написать сообщение… (Ctrl+Enter — отправить)"
+                  rows={3}
                   style={{
                     flex: 1,
-                    resize: 'none',
+                    resize: 'vertical',
+                    minHeight: '64px',
                     border: '1px solid #e0e0e0',
                     borderRadius: '8px',
                     padding: '8px 10px',
@@ -769,6 +814,7 @@ const ChatCenter = () => {
                     outline: 'none',
                   }}
                 />
+
                 <button
                   onClick={() => void sendMessage()}
                   disabled={isSending || draft.trim().length === 0}
