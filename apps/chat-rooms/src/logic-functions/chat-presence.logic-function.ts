@@ -6,6 +6,7 @@ import {
 } from 'twenty-sdk/logic-function';
 
 import { CHAT_PRESENCE_FUNCTION_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
+import { ChatService, describeError } from 'src/shared/chat-service';
 import { clearPresence, notePresence } from 'src/shared/presence';
 
 /**
@@ -23,12 +24,21 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
   const body = (event.body ?? {}) as { chatId?: string; closed?: boolean };
   const chatId = String(body.chatId ?? '').trim();
 
-  if (!chatId) {
-    clearPresence(context.workspaceMemberId);
-  } else if (body.closed === true) {
+  if (!chatId || body.closed === true) {
     clearPresence(context.workspaceMemberId);
   } else {
     notePresence(context.workspaceMemberId, chatId);
+
+    // Основная отметка живёт в базе: память модуля не общая для разных
+    // обработчиков (каждый логик-функция собирается отдельным бандлом).
+    try {
+      await new ChatService().markRead(context.workspaceMemberId, chatId, true);
+    } catch (error) {
+      return new Response(JSON.stringify({ error: describeError(error) }), {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
   }
 
   return new Response(JSON.stringify({ ok: true }), {

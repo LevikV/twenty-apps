@@ -1,6 +1,6 @@
 import { RestApiClient } from 'twenty-client-sdk/rest';
 
-import { isPresent, setOpenTarget, takeOpenTarget } from 'src/shared/presence';
+import { PRESENCE_TTL_MS, isPresent, setOpenTarget, takeOpenTarget } from 'src/shared/presence';
 
 /**
  * Серверная часть «Центра коммуникации».
@@ -38,6 +38,13 @@ export type MessageView = {
   authorId: string | null;
   authorName: string;
   mentions: MentionView[];
+};
+
+/** Смотрел ли сотрудник диалог в последние секунды (отметка «прочитано» свежая). */
+const isWatchingNow = (value: unknown): boolean => {
+  const at = Date.parse(String(value ?? ''));
+
+  return !Number.isNaN(at) && Date.now() - at < PRESENCE_TTL_MS;
 };
 
 const unwrap = (body: unknown): Record<string, unknown> =>
@@ -260,7 +267,7 @@ export class ChatService {
     const response = await this.client.get<unknown>('/rest/chatParticipants', {
       query: {
         filter: `chatId[eq]:"${chatId}"`,
-        select: 'id,polzovatelId,neprochitano',
+        select: 'id,polzovatelId,neprochitano,prochitanoDo',
         limit: 60,
       },
     });
@@ -275,8 +282,8 @@ export class ChatService {
       const recipientId = asString(participant.polzovatelId);
 
       // Кто сейчас в этом чате — видит сообщение сразу, непрочитанное ему не начисляем
-      // и пуш не шлём (признак присутствия ставит сам виджет чата).
-      if (recipientId && isPresent(recipientId, chatId)) {
+      // и пуш не шлём. Признак присутствия ставит виджет чата раз в 5 секунд.
+      if (recipientId && (isPresent(recipientId, chatId) || isWatchingNow(participant.prochitanoDo))) {
         continue;
       }
 
@@ -637,7 +644,7 @@ export class ChatService {
     return { chatId: null };
   }
 
-  async markRead(memberId: string, chatId: string): Promise<void> {
+  async markRead(memberId: string, chatId: string, isWatching = false): Promise<void> {
     const participations = await this.myParticipations(memberId);
     const mine = participations.find((participant) => asString(participant.chatId) === chatId);
 
@@ -645,13 +652,18 @@ export class ChatService {
       return;
     }
 
-    if (asNumber(mine.neprochitano) === 0) {
+    const unread = asNumber(mine.neprochitano);
+
+    if (unread === 0 && !isWatching) {
       return;
     }
 
-    await this.client.patch<unknown>(`/rest/chatParticipants/${mine.id}`, {
-      neprochitano: 0,
-      prochitanoDo: new Date().toISOString(),
-    });
+    const patch: Record<string, unknown> = { prochitanoDo: new Date().toISOString() };
+
+    if (unread !== 0) {
+      patch.neprochitano = 0;
+    }
+
+    await this.client.patch<unknown>(`/rest/chatParticipants/${mine.id}`, patch);
   }
 }
