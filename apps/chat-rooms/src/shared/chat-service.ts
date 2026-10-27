@@ -316,6 +316,38 @@ export class ChatService {
     }
   }
 
+  /** Сигнал браузеру: счётчик непрочитанных изменился, обнови бейдж. */
+  private async pokeBadge(memberId: string): Promise<void> {
+    try {
+      const apiBase = (readEnv().TWENTY_API_URL ?? '').replace(/\/+$/, '');
+
+      if (!apiBase) {
+        return;
+      }
+
+      const record = await this.client.get<unknown>(`/rest/workspaceMembers/${memberId}`, {
+        query: { select: 'id,userId' },
+      });
+
+      const userId = asString(
+        (record as { data?: { workspaceMember?: { userId?: string } } })?.data?.workspaceMember
+          ?.userId,
+      );
+
+      if (!userId) {
+        return;
+      }
+
+      await fetch(`${apiBase}/api/notify/badge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+    } catch {
+      // сигнал — не критичен: бейдж обновится опросом
+    }
+  }
+
   /** Куда вести по пушу: карточка объекта для чатов сделок, иначе — страница диалогов. */
   private async chatLink(chatId: string): Promise<{ link: string; linkLabel: string }> {
     const fallback = { link: `${CHAT_PAGE_PATH}?chatId=${chatId}`, linkLabel: 'Открыть чат' };
@@ -708,5 +740,9 @@ export class ChatService {
     }
 
     await this.client.patch<unknown>(`/rest/chatParticipants/${mine.id}`, patch);
+
+    if (unread !== 0) {
+      await this.pokeBadge(memberId);
+    }
   }
 }
