@@ -180,6 +180,7 @@ export const CardChat = () => {
   const [pendingMentions, setPendingMentions] = useState<MentionView[]>([]);
 
   const draftRef = useRef(draft);
+  const roomRef = useRef<RoomState | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const suppressRef = useRef<{ until: number; expected: string; caret: number } | null>(null);
 
@@ -196,6 +197,7 @@ export const CardChat = () => {
       );
 
       setRoom(state);
+      roomRef.current = state;
       setError(null);
 
       if (state.chatId) {
@@ -221,6 +223,28 @@ export const CardChat = () => {
 
     return () => clearInterval(timer);
   }, [reload]);
+
+  // Присутствие: пока карточка видна, человек считается читающим этот чат.
+  // Отдельный маяк, чтобы не гонять перечитывание ленты ради отметки.
+  useEffect(() => {
+    const beat = () => {
+      const chatId = roomRef.current?.chatId;
+
+      if (!chatId) {
+        return;
+      }
+
+      if (typeof document !== 'undefined' && document.hidden) {
+        return;
+      }
+
+      void callRoute('/chat-presence', { method: 'POST', body: { chatId } }).catch(() => undefined);
+    };
+
+    const timer = setInterval(beat, 5000);
+
+    return () => clearInterval(timer);
+  }, []);
 
   const updateMentionState = (value: string) => {
     const atIndex = value.lastIndexOf('@');

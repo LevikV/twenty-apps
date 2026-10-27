@@ -362,6 +362,28 @@ const ChatCenter = () => {
     return () => clearInterval(timer);
   }, [refresh]);
 
+  // Присутствие: пока диалог открыт и вкладка видна, пуш и счётчик не нужны.
+  // Отдельный короткий такт — данные не перечитываем, только отмечаемся.
+  useEffect(() => {
+    const beat = () => {
+      const chatId = activeChatIdRef.current;
+
+      if (!chatId) {
+        return;
+      }
+
+      if (typeof document !== 'undefined' && document.hidden) {
+        return;
+      }
+
+      void callRoute('/chat-presence', { method: 'POST', body: { chatId } }).catch(() => undefined);
+    };
+
+    const timer = setInterval(beat, 5000);
+
+    return () => clearInterval(timer);
+  }, []);
+
   useEffect(() => {
     if (!activeChatId) {
       setMessages([]);

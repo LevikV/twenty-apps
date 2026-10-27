@@ -7,7 +7,7 @@
  * худшее следствие — лишний пуш, не потеря данных.
  */
 
-export const PRESENCE_TTL_MS = 90_000;
+export const PRESENCE_TTL_MS = 15_000;
 
 type PresenceEntry = {
   chatId: string;
