@@ -1,6 +1,6 @@
 import { RestApiClient } from 'twenty-client-sdk/rest';
 
-import { isPresent } from 'src/shared/presence';
+import { isPresent, setOpenTarget, takeOpenTarget } from 'src/shared/presence';
 
 /**
  * Серверная часть «Центра коммуникации».
@@ -345,6 +345,8 @@ export class ChatService {
           continue;
         }
 
+        setOpenTarget(memberId, chatId);
+
         await fetch(`${apiBase}/api/notify`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -535,6 +537,13 @@ export class ChatService {
    * на страницу, в котором лежит id диалога (`<pageId>|<chatId>`), не старше 10 минут.
    */
   async openTarget(memberId: string): Promise<{ chatId: string | null }> {
+    // Пуш о сообщении: записи в «Уведомлениях» нет, цель держим в памяти.
+    const pending = takeOpenTarget(memberId);
+
+    if (pending) {
+      return { chatId: pending };
+    }
+
     const response = await this.client.get<unknown>('/rest/uvedomleniya', {
       query: {
         filter: `poluchatelId[eq]:"${memberId}"`,
