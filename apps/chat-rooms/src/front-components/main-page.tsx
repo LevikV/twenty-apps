@@ -339,6 +339,22 @@ const ChatCenter = () => {
   }, [loadDialogs, initialChatId]);
 
   useEffect(() => {
+    // Подстраховка к /chat-open-target: страница-обёртка знает ?chatId
+    // и пересылает его сюда через postMessage.
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; chatId?: string } | null;
+
+      if (data && data.type === 'crm-open-chat' && data.chatId) {
+        setActiveChatId(data.chatId);
+      }
+    };
+
+    window.addEventListener('message', onMessage);
+
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
+  useEffect(() => {
     const timer = setInterval(() => {
       void refresh().catch((caughtError) => setError((caughtError as Error).message));
     }, 10000);

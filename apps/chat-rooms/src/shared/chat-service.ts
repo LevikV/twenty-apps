@@ -288,6 +288,7 @@ export class ChatService {
     return { id: created.id };
   }
 
+
   /** Название диалога для пуша (как его видит человек в списке). */
   private async chatTitle(chatId: string): Promise<string> {
     try {
@@ -453,6 +454,14 @@ export class ChatService {
       return;
     }
 
+    // Личные и клиентские чаты упоминания не уведомляют: открывать человеку
+    // нечего, а карточки объекта у такого чата нет.
+    const chatTarget = await this.objectTargetForChat(chatId);
+
+    if (!chatTarget) {
+      return;
+    }
+
     for (const memberId of targets) {
       const record = await this.client.get<unknown>(`/rest/workspaceMembers/${memberId}`, {
         query: { select: 'id,userId' },
@@ -477,12 +486,51 @@ export class ChatService {
           variant: 'info',
           tip: 'soobshchenie',
           prioritet: 'obychnoe',
-          link: `${CHAT_PAGE_PATH}?chatId=${chatId}`,
-          linkLabel: 'Открыть чат',
+          link: `/object/${chatTarget.objectName}/${chatTarget.recordId}`,
+          linkLabel: 'Открыть карточку',
           duration: 8000,
         }),
       });
     }
+  }
+
+
+  /** Объект, к которому привязан чат (null — личный или клиентский). */
+  private async objectTargetForChat(
+    chatId: string,
+  ): Promise<{ objectName: string; recordId: string } | null> {
+    const response = await this.client.get<unknown>('/rest/chatTargets', {
+      query: {
+        filter: `chatId[eq]:"${chatId}"`,
+        select:
+          'id,sdelkaOpportunityId,sdelkaRemontOborudovaniyaId,sdelkaTenderId,sdelkaZapravkaKartridzheyId,zadachaId',
+        limit: 1,
+      },
+    });
+
+    const target = rowsOf(response, 'chatTargets')[0];
+
+    if (!target) {
+      return null;
+    }
+
+    const map: Array<[string, string]> = [
+      ['sdelkaOpportunityId', 'opportunity'],
+      ['sdelkaRemontOborudovaniyaId', 'remontOborudovaniya'],
+      ['sdelkaTenderId', 'tender'],
+      ['sdelkaZapravkaKartridzheyId', 'zapravkaKartridzhey'],
+      ['zadachaId', 'task'],
+    ];
+
+    for (const [field, objectName] of map) {
+      const recordId = asString(target[field]);
+
+      if (recordId) {
+        return { objectName, recordId };
+      }
+    }
+
+    return null;
   }
 
   /** Учётная запись человека по карточке сотрудника (если она есть). */
