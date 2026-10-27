@@ -316,6 +316,48 @@ export class ChatService {
     }
   }
 
+  /** Куда вести по пушу: карточка объекта для чатов сделок, иначе — страница диалогов. */
+  private async chatLink(chatId: string): Promise<{ link: string; linkLabel: string }> {
+    const fallback = { link: `${CHAT_PAGE_PATH}?chatId=${chatId}`, linkLabel: 'Открыть чат' };
+
+    try {
+      const response = await this.client.get<unknown>('/rest/chatTargets', {
+        query: {
+          filter: `chatId[eq]:"${chatId}"`,
+          select:
+            'id,chatId,sdelkaOpportunityId,sdelkaRemontOborudovaniyaId,sdelkaTenderId,sdelkaZapravkaKartridzheyId,zadachaId',
+          limit: 1,
+        },
+      });
+
+      const target = rowsOf(response, 'chatTargets')[0];
+
+      if (!target) {
+        return fallback;
+      }
+
+      const pairs: Array<[string, string]> = [
+        ['sdelkaOpportunityId', 'opportunity'],
+        ['sdelkaRemontOborudovaniyaId', 'remontOborudovaniya'],
+        ['sdelkaTenderId', 'tender'],
+        ['sdelkaZapravkaKartridzheyId', 'zapravkaKartridzhey'],
+        ['zadachaId', 'task'],
+      ];
+
+      for (const [field, objectName] of pairs) {
+        const recordId = asString(target[field]);
+
+        if (recordId) {
+          return { link: `/object/${objectName}/${recordId}`, linkLabel: 'Открыть карточку' };
+        }
+      }
+    } catch {
+      // нет цели — ведём в диалоги
+    }
+
+    return fallback;
+  }
+
   /**
    * Пуш о новом сообщении — без записи в «Уведомления» (сообщение и так в чате).
    * Не шлём автору и тем, у кого этот диалог открыт прямо сейчас.
@@ -343,6 +385,7 @@ export class ChatService {
     const names = await this.memberNames();
     const authorName = names[senderMemberId] ?? 'Сотрудник';
     const title = await this.chatTitle(chatId);
+    const chatLink = await this.chatLink(chatId);
 
     for (const memberId of targets) {
       try {
@@ -371,8 +414,8 @@ export class ChatService {
             variant: 'info',
             tip: 'soobshchenie',
             prioritet: 'obychnoe',
-            link: `${CHAT_PAGE_PATH}?chatId=${chatId}`,
-            linkLabel: 'Открыть чат',
+            link: chatLink.link,
+            linkLabel: chatLink.linkLabel,
             duration: 10000,
             persist: false,
           }),
