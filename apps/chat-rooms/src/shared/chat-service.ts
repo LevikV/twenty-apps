@@ -1,5 +1,7 @@
 import { RestApiClient } from 'twenty-client-sdk/rest';
 
+import { isPresent } from 'src/shared/presence';
+
 /**
  * Серверная часть «Центра коммуникации».
  *
@@ -263,6 +265,8 @@ export class ChatService {
       },
     });
 
+    const recipients: string[] = [];
+
     for (const participant of rowsOf(response, 'chatParticipants')) {
       if (!participant.id || asString(participant.polzovatelId) === memberId) {
         continue;
@@ -271,9 +275,96 @@ export class ChatService {
       await this.client.patch<unknown>(`/rest/chatParticipants/${participant.id}`, {
         neprochitano: asNumber(participant.neprochitano) + 1,
       });
+
+      const recipientId = asString(participant.polzovatelId);
+
+      if (recipientId) {
+        recipients.push(recipientId);
+      }
     }
 
+    await this.pushNewMessage(memberId, chatId, text, recipients);
+
     return { id: created.id };
+  }
+
+  /** Название диалога для пуша (как его видит человек в списке). */
+  private async chatTitle(chatId: string): Promise<string> {
+    try {
+      const record = await this.client.get<unknown>(`/rest/chats/${chatId}`, {
+        query: { select: 'id,name' },
+      });
+      const name = asString((record as { data?: { chat?: { name?: string } } })?.data?.chat?.name);
+
+      return name || 'Чат';
+    } catch {
+      return 'Чат';
+    }
+  }
+
+  /**
+   * Пуш о новом сообщении — без записи в «Уведомления» (сообщение и так в чате).
+   * Не шлём автору и тем, у кого этот диалог открыт прямо сейчас.
+   */
+  private async pushNewMessage(
+    senderMemberId: string,
+    chatId: string,
+    text: string,
+    recipients: string[],
+  ): Promise<void> {
+    const targets = recipients.filter(
+      (memberId) => memberId !== senderMemberId && !isPresent(memberId, chatId),
+    );
+
+    if (targets.length === 0) {
+      return;
+    }
+
+    const apiBase = (readEnv().TWENTY_API_URL ?? '').replace(/\/+$/, '');
+
+    if (!apiBase) {
+      return;
+    }
+
+    const names = await this.memberNames();
+    const authorName = names[senderMemberId] ?? 'Сотрудник';
+    const title = await this.chatTitle(chatId);
+
+    for (const memberId of targets) {
+      try {
+        const record = await this.client.get<unknown>(`/rest/workspaceMembers/${memberId}`, {
+          query: { select: 'id,userId' },
+        });
+
+        const userId = asString(
+          (record as { data?: { workspaceMember?: { userId?: string } } })?.data
+            ?.workspaceMember?.userId,
+        );
+
+        if (!userId) {
+          continue;
+        }
+
+        await fetch(`${apiBase}/api/notify`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId,
+            title: `${authorName} · ${title}`,
+            text: text.slice(0, 160),
+            variant: 'info',
+            tip: 'soobshchenie',
+            prioritet: 'obychnoe',
+            link: `${CHAT_PAGE_PATH}?chatId=${chatId}`,
+            linkLabel: 'Открыть чат',
+            duration: 8000,
+            persist: false,
+          }),
+        });
+      } catch {
+        // пуш — не критичная часть: сообщение уже сохранено
+      }
+    }
   }
 
   private async mentionsByMessage(messageIds: string[]): Promise<Map<string, MentionView[]>> {

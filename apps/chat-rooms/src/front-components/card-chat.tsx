@@ -197,6 +197,14 @@ export const CardChat = () => {
 
       setRoom(state);
       setError(null);
+
+      if (state.chatId) {
+        // Отмечаем присутствие: пока карточка открыта, пуш о сообщении не нужен.
+        void callRoute('/chat-presence', {
+          method: 'POST',
+          body: { chatId: state.chatId },
+        }).catch(() => undefined);
+      }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     }

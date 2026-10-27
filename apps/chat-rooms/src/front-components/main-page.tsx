@@ -290,6 +290,11 @@ const ChatCenter = () => {
 
     await loadMessages(activeId);
 
+    // Отмечаем присутствие: пока диалог открыт, пуш о новом сообщении не нужен.
+    void callRoute('/chat-presence', { method: 'POST', body: { chatId: activeId } }).catch(
+      () => undefined,
+    );
+
     // Диалог открыт — входящие считаются прочитанными сразу, счётчик не копится.
     const activeDialog = freshDialogs.find((dialog) => dialog.id === activeId);
 
