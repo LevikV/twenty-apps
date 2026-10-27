@@ -602,12 +602,12 @@ export const CardChat = () => {
               }
             }
 
-            if (event.key === 'Enter' && !event.shiftKey) {
+            if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
               event.preventDefault();
               void send();
             }
           }}
-          placeholder="Написать в обсуждение… (Enter — отправить, @ — упомянуть)"
+          placeholder="Написать в обсуждение… (Ctrl+Enter — отправить, @ — упомянуть)"
           rows={2}
           style={{
             position: 'relative',

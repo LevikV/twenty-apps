@@ -931,12 +931,12 @@ const ChatCenter = () => {
                         }
                       }
 
-                      if (event.key === 'Enter' && !event.shiftKey) {
+                      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
                         event.preventDefault();
                         void sendMessage();
                       }
                     }}
-                    placeholder="Написать сообщение… (@ — упомянуть, Enter — отправить, Shift+Enter — новая строка)"
+                    placeholder="Написать сообщение… (@ — упомянуть, Ctrl+Enter — отправить)"
                     {...({ selectionStart: caretTarget ?? undefined, selectionEnd: caretTarget ?? undefined } as any)}
                     rows={3}
                     style={{
