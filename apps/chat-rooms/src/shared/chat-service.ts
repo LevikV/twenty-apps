@@ -121,7 +121,7 @@ export class ChatService {
     const response = await this.client.get<unknown>('/rest/chatParticipants', {
       query: {
         filter: `polzovatelId[eq]:"${memberId}"`,
-        select: 'id,chatId,neprochitano,prochitanoDo',
+        select: 'id,chatId,neprochitano,prochitanoDo,prisutstvie',
         limit: 60,
       },
     });
@@ -267,12 +267,13 @@ export class ChatService {
     const response = await this.client.get<unknown>('/rest/chatParticipants', {
       query: {
         filter: `chatId[eq]:"${chatId}"`,
-        select: 'id,polzovatelId,neprochitano,prochitanoDo',
+        select: 'id,polzovatelId,neprochitano,prochitanoDo,prisutstvie',
         limit: 60,
       },
     });
 
     const recipients: string[] = [];
+    const everyoneElse: string[] = [];
 
     for (const participant of rowsOf(response, 'chatParticipants')) {
       if (!participant.id || asString(participant.polzovatelId) === memberId) {
@@ -281,19 +282,34 @@ export class ChatService {
 
       const recipientId = asString(participant.polzovatelId);
 
-      // Кто сейчас в этом чате — видит сообщение сразу, непрочитанное ему не начисляем
-      // и пуш не шлём. Признак присутствия ставит виджет чата раз в 5 секунд.
-      if (recipientId && (isPresent(recipientId, chatId) || isWatchingNow(participant.prochitanoDo))) {
-        continue;
-      }
+      // Кто сейчас в этом чате — видит сообщение сразу. Счётчик ему всё равно
+      // увеличиваем (маяк присутствия обнулит его в ближайшие 5 секунд), чтобы
+      // сообщение не потерялось, если человек закроет карточку в эту же секунду.
+      // Пуш при этом не шлём.
+      const watchingNow =
+        (recipientId ? isPresent(recipientId, chatId) : false) ||
+        isWatchingNow(participant.prisutstvie);
 
       await this.client.patch<unknown>(`/rest/chatParticipants/${participant.id}`, {
         neprochitano: asNumber(participant.neprochitano) + 1,
       });
 
       if (recipientId) {
+        everyoneElse.push(recipientId);
+      }
+
+      if (watchingNow) {
+        continue;
+      }
+
+      if (recipientId) {
         recipients.push(recipientId);
       }
+    }
+
+    // Сигнал в браузеры: новое сообщение в этом чате — обновить ленту и бейдж.
+    for (const recipientId of everyoneElse) {
+      await this.pokeBadge(recipientId, chatId);
     }
 
     await this.pushNewMessage(memberId, chatId, text, recipients);
@@ -316,23 +332,32 @@ export class ChatService {
     }
   }
 
+  /** Базовый адрес API (для внутренних вызовов контроллера уведомлений). */
+  private apiBase(): string {
+    return (readEnv().TWENTY_API_URL ?? '').replace(/\/+$/, '');
+  }
+
+  /** userId пользователя по идентификатору участника пространства. */
+  private async memberUserId(memberId: string): Promise<string | null> {
+    const record = await this.client.get<unknown>(`/rest/workspaceMembers/${memberId}`, {
+      query: { select: 'id,userId' },
+    });
+
+    return asString(
+      (record as { data?: { workspaceMember?: { userId?: string } } })?.data?.workspaceMember?.userId,
+    );
+  }
+
   /** Сигнал браузеру: счётчик непрочитанных изменился, обнови бейдж. */
-  private async pokeBadge(memberId: string): Promise<void> {
+  private async pokeBadge(memberId: string, chatId?: string): Promise<void> {
     try {
-      const apiBase = (readEnv().TWENTY_API_URL ?? '').replace(/\/+$/, '');
+      const apiBase = this.apiBase();
 
       if (!apiBase) {
         return;
       }
 
-      const record = await this.client.get<unknown>(`/rest/workspaceMembers/${memberId}`, {
-        query: { select: 'id,userId' },
-      });
-
-      const userId = asString(
-        (record as { data?: { workspaceMember?: { userId?: string } } })?.data?.workspaceMember
-          ?.userId,
-      );
+      const userId = await this.memberUserId(memberId);
 
       if (!userId) {
         return;
@@ -341,7 +366,7 @@ export class ChatService {
       await fetch(`${apiBase}/api/notify/badge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId }),
+        body: JSON.stringify({ userId, chatId: chatId ?? null }),
       });
     } catch {
       // сигнал — не критичен: бейдж обновится опросом
@@ -733,7 +758,10 @@ export class ChatService {
       return;
     }
 
-    const patch: Record<string, unknown> = { prochitanoDo: new Date().toISOString() };
+    const patch: Record<string, unknown> = {
+      prochitanoDo: new Date().toISOString(),
+      prisutstvie: new Date().toISOString(),
+    };
 
     if (unread !== 0) {
       patch.neprochitano = 0;
@@ -743,6 +771,51 @@ export class ChatService {
 
     if (unread !== 0) {
       await this.pokeBadge(memberId);
+    }
+  }
+
+  /** Сотрудник закрыл чат: снимаем признак присутствия, непрочитанное досылаем пушем. */
+  async leave(memberId: string, chatId: string): Promise<void> {
+    const participations = await this.myParticipations(memberId);
+    const mine = participations.find((participant) => asString(participant.chatId) === chatId);
+
+    if (!mine?.id) {
+      return;
+    }
+
+    await this.client.patch<unknown>(`/rest/chatParticipants/${mine.id}`, { prisutstvie: null });
+
+    const unread = asNumber(mine.neprochitano);
+
+    if (unread === 0) {
+      return;
+    }
+
+    const userId = await this.memberUserId(memberId);
+
+    if (!userId) {
+      return;
+    }
+
+    const chatLink = await this.chatLink(chatId);
+    const title = await this.chatTitle(chatId);
+
+    try {
+      await fetch(`${this.apiBase()}/api/notify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          title,
+          text: unread === 1 ? 'Есть новое сообщение' : `Новых сообщений: ${unread}`,
+          link: chatLink.link,
+          linkLabel: chatLink.linkLabel,
+          persist: false,
+          duration: 10000,
+        }),
+      });
+    } catch {
+      // пуш — не критичен, непрочитанное останется в счётчике
     }
   }
 }

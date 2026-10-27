@@ -379,9 +379,40 @@ const ChatCenter = () => {
       void callRoute('/chat-presence', { method: 'POST', body: { chatId } }).catch(() => undefined);
     };
 
+    const leave = () => {
+      const chatId = activeChatIdRef.current;
+
+      if (!chatId) {
+        return;
+      }
+
+      void callRoute('/chat-presence', { method: 'POST', body: { chatId, closed: true } }).catch(
+        () => undefined,
+      );
+    };
+
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        leave();
+      } else {
+        beat();
+      }
+    };
+
     const timer = setInterval(beat, 5000);
 
-    return () => clearInterval(timer);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility);
+    }
+
+    return () => {
+      clearInterval(timer);
+      leave();
+
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -395,6 +426,29 @@ const ChatCenter = () => {
       setError((caughtError as Error).message),
     );
     void markRead(activeChatId).catch(() => undefined);
+  }, [activeChatId, loadMessages, markRead]);
+
+  // Новое сообщение в открытом чате: ядро присылает сигнал по вебсокету,
+  // обёртка пересылает его сюда — перечитываем ленту сразу, без ожидания опроса.
+  useEffect(() => {
+    const onPing = (event: MessageEvent) => {
+      const data = event.data as { type?: string; chatId?: string } | null;
+
+      if (!data || data.type !== 'crm-chat-ping' || !data.chatId) {
+        return;
+      }
+
+      if (data.chatId !== activeChatId) {
+        return;
+      }
+
+      void loadMessages(data.chatId).catch(() => undefined);
+      void markRead(data.chatId).catch(() => undefined);
+    };
+
+    window.addEventListener('message', onPing);
+
+    return () => window.removeEventListener('message', onPing);
   }, [activeChatId, loadMessages, markRead]);
 
   const updateMentionState = (value: string) => {

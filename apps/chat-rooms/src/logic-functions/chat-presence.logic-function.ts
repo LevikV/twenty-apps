@@ -10,8 +10,9 @@ import { ChatService, describeError } from 'src/shared/chat-service';
 import { clearPresence, notePresence } from 'src/shared/presence';
 
 /**
- * «Я смотрю этот чат» — фронт отмечается раз в 25 секунд, пока диалог открыт.
+ * «Я смотрю этот чат» — фронт отмечается раз в 5 секунд, пока диалог открыт.
  * Пока отметка свежая, пуш о новом сообщении этому человеку не отправляется.
+ * При закрытии чата приходит { closed: true } — отметка снимается сразу.
  */
 const handler = async (event: RoutePayload, context: LogicFunctionExecutionContext) => {
   if (!context.workspaceMemberId) {
@@ -24,7 +25,19 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
   const body = (event.body ?? {}) as { chatId?: string; closed?: boolean };
   const chatId = String(body.chatId ?? '').trim();
 
-  if (!chatId || body.closed === true) {
+  if (body.closed === true) {
+    clearPresence(context.workspaceMemberId);
+
+    // Человек закрыл чат: снимаем признак присутствия сразу, а непрочитанное
+    // досылаем пушем — иначе сообщение, пришедшее в последнюю секунду, потеряется.
+    if (chatId) {
+      try {
+        await new ChatService().leave(context.workspaceMemberId, chatId);
+      } catch {
+        // не критично: присутствие всё равно истечёт по времени
+      }
+    }
+  } else if (!chatId) {
     clearPresence(context.workspaceMemberId);
   } else {
     notePresence(context.workspaceMemberId, chatId);

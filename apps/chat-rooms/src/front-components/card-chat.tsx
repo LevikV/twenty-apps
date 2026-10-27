@@ -241,10 +241,64 @@ export const CardChat = () => {
       void callRoute('/chat-presence', { method: 'POST', body: { chatId } }).catch(() => undefined);
     };
 
+    // Уход из чата: снимаем присутствие сразу, иначе сообщение, пришедшее
+    // в последние секунды, никого не разбудит.
+    const leave = () => {
+      const chatId = roomRef.current?.chatId;
+
+      if (!chatId) {
+        return;
+      }
+
+      void callRoute('/chat-presence', { method: 'POST', body: { chatId, closed: true } }).catch(
+        () => undefined,
+      );
+    };
+
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        leave();
+      } else {
+        beat();
+      }
+    };
+
     const timer = setInterval(beat, 5000);
 
-    return () => clearInterval(timer);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility);
+    }
+
+    return () => {
+      clearInterval(timer);
+      leave();
+
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility);
+      }
+    };
   }, []);
+
+  // Новое сообщение в этом чате: сигнал по вебсокету — обновляем ленту сразу.
+  useEffect(() => {
+    const onPing = (event: MessageEvent) => {
+      const data = event.data as { type?: string; chatId?: string } | null;
+
+      if (!data || data.type !== 'crm-chat-ping' || !data.chatId) {
+        return;
+      }
+
+      if (data.chatId !== roomRef.current?.chatId) {
+        return;
+      }
+
+      void reload();
+    };
+
+    window.addEventListener('message', onPing);
+
+    return () => window.removeEventListener('message', onPing);
+  }, [reload]);
 
   const updateMentionState = (value: string) => {
     const atIndex = value.lastIndexOf('@');
