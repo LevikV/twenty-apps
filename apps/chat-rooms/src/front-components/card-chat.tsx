@@ -180,6 +180,8 @@ export const CardChat = () => {
   const [pendingMentions, setPendingMentions] = useState<MentionView[]>([]);
 
   const draftRef = useRef(draft);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const suppressRef = useRef<{ until: number; expected: string; caret: number } | null>(null);
 
   draftRef.current = draft;
 
@@ -268,6 +270,57 @@ export const CardChat = () => {
     };
   }, [mentionQuery]);
 
+  /**
+   * Вставка текста в поле хоста: пишем значение и сразу ставим каретку в конец.
+   * Без этого хост успевает применить своё действие (перевод строки на Enter)
+   * раньше нашего обработчика, и вставка «не срабатывает».
+   */
+  const applyDraft = (value: string, caret: number) => {
+    suppressRef.current = { until: Date.now() + 500, expected: value, caret };
+    setDraft(value);
+
+    const node = composerRef.current;
+
+    try {
+      if (node) {
+        node.value = value;
+
+        if (typeof node.setSelectionRange === 'function') {
+          node.setSelectionRange(caret, caret);
+        }
+
+        node.focus?.();
+      }
+    } catch {
+      // песочница не даёт доступа к узлу
+    }
+  };
+
+  /** Подсветка упоминаний прямо в поле ввода (слой под прозрачным текстом). */
+  const renderHighlightedDraft = () => {
+    if (pendingMentions.length === 0 || draft.length === 0) {
+      return draft;
+    }
+
+    const labels = pendingMentions
+      .map((mention) => `@${mention.label}`)
+      .sort((left, right) => right.length - left.length);
+    const pattern = new RegExp(
+      `(${labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`,
+      'g',
+    );
+
+    return draft.split(pattern).map((part, index) =>
+      labels.includes(part) ? (
+        <span key={index} style={{ color: '#1961ff', fontWeight: 600 }}>
+          {part}
+        </span>
+      ) : (
+        <span key={index}>{part}</span>
+      ),
+    );
+  };
+
   const insertMention = (suggestion: MentionSuggestion) => {
     if (mentionStart < 0) {
       return;
@@ -277,7 +330,7 @@ export const CardChat = () => {
     const after = draft.slice(mentionStart + 1 + (mentionQuery?.length ?? 0));
     const value = `${before}@${suggestion.label} ${after}`;
 
-    setDraft(value);
+    applyDraft(value, value.length);
     setMentionQuery(null);
     setSuggestions([]);
     setMentionIndex(0);
@@ -432,11 +485,57 @@ export const CardChat = () => {
           </div>
         )}
 
+        <div style={{ position: 'relative' }}>
+          {/* Слой подсветки: в поле ввода нельзя красить часть текста,
+              поэтому под прозрачным текстом рисуем тот же текст с акцентом. */}
+          <div
+            aria-hidden
+            style={{
+              position: 'absolute',
+              inset: 0,
+              boxSizing: 'border-box',
+              border: '1px solid transparent',
+              borderRadius: '8px',
+              padding: '8px 10px',
+              fontSize: '13px',
+              fontFamily: 'inherit',
+              lineHeight: '18px',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              color: '#1a1a1a',
+              overflow: 'hidden',
+              pointerEvents: 'none',
+            }}
+          >
+            {renderHighlightedDraft()}
+          </div>
+
         <textarea
+          ref={composerRef}
           value={draft}
           onChange={(event) => {
-            setDraft(event.target.value);
-            updateMentionState(event.target.value);
+            const value = event.target.value;
+            const guard = suppressRef.current;
+
+            // Хост применил своё действие (например, перевод строки на Enter)
+            // раньше нашего — возвращаем вставленный текст.
+            if (guard && Date.now() < guard.until && value !== guard.expected) {
+              const node = composerRef.current;
+
+              try {
+                if (node) {
+                  node.value = guard.expected;
+                }
+              } catch {
+                // нет доступа к узлу
+              }
+
+              return;
+            }
+
+            suppressRef.current = null;
+            setDraft(value);
+            updateMentionState(value);
           }}
           onKeyDown={(event) => {
             if (popupOpen) {
@@ -479,6 +578,7 @@ export const CardChat = () => {
           placeholder="Написать в обсуждение… (Enter — отправить, @ — упомянуть)"
           rows={2}
           style={{
+            position: 'relative',
             width: '100%',
             resize: 'vertical',
             border: '1px solid #d6d6d6',
@@ -489,8 +589,12 @@ export const CardChat = () => {
             lineHeight: '18px',
             outline: 'none',
             boxSizing: 'border-box',
+            background: 'transparent',
+            color: 'transparent',
+            caretColor: '#1a1a1a',
           }}
         />
+        </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
           <button
