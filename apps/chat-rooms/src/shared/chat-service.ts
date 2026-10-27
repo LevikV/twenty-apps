@@ -351,13 +351,13 @@ export class ChatService {
           body: JSON.stringify({
             userId,
             title: `${authorName} · ${title}`,
-            text: text.slice(0, 160),
+            text: text.slice(0, 140),
             variant: 'info',
             tip: 'soobshchenie',
             prioritet: 'obychnoe',
             link: `${CHAT_PAGE_PATH}?chatId=${chatId}`,
             linkLabel: 'Открыть чат',
-            duration: 8000,
+            duration: 10000,
             persist: false,
           }),
         });
