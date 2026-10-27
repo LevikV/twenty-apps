@@ -272,11 +272,17 @@ export class ChatService {
         continue;
       }
 
+      const recipientId = asString(participant.polzovatelId);
+
+      // Кто сейчас в этом чате — видит сообщение сразу, непрочитанное ему не начисляем
+      // и пуш не шлём (признак присутствия ставит сам виджет чата).
+      if (recipientId && isPresent(recipientId, chatId)) {
+        continue;
+      }
+
       await this.client.patch<unknown>(`/rest/chatParticipants/${participant.id}`, {
         neprochitano: asNumber(participant.neprochitano) + 1,
       });
-
-      const recipientId = asString(participant.polzovatelId);
 
       if (recipientId) {
         recipients.push(recipientId);
