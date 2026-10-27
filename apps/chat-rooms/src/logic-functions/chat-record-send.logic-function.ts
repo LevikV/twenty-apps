@@ -48,23 +48,10 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
       }));
 
     const rooms = new RecordRoomService();
-    const mentionedMemberIds: string[] = [];
 
-    for (const mention of mentions) {
-      if (mention.type === 'POLZOVATEL') {
-        mentionedMemberIds.push(mention.id);
-      }
-
-      if (mention.type === 'SOTRUDNIK') {
-        const memberId = await rooms.memberIdBySotrudnik(mention.id);
-
-        if (memberId) {
-          mentionedMemberIds.push(memberId);
-        }
-      }
-    }
-
-    const chatId = await rooms.ensure(recordId, context.workspaceMemberId, mentionedMemberIds);
+    // Упомянутые участниками не становятся: в диалог попадают только те,
+    // кого назначили на запись или кто сам написал (решение 27.10.2026).
+    const chatId = await rooms.ensure(recordId, context.workspaceMemberId);
     const chat = new ChatService();
     const result = await chat.send(context.workspaceMemberId, chatId, text, mentions);
 

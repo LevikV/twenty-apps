@@ -191,7 +191,7 @@ export class RecordRoomService {
    * Комната для записи: существующая либо только что созданная.
    * Вызывается при отправке сообщения — раньше комнаты не существует.
    */
-  async ensure(recordId: string, memberId: string, mentionedMemberIds: string[]): Promise<string> {
+  async ensure(recordId: string, memberId: string): Promise<string> {
     const resolved = await this.resolve(recordId);
 
     if (!resolved) {
@@ -241,12 +241,6 @@ export class RecordRoomService {
 
     for (const member of participants) {
       all.set(member.memberId, member.rol);
-    }
-
-    for (const mentioned of mentionedMemberIds) {
-      if (mentioned && mentioned !== memberId && !all.has(mentioned)) {
-        all.set(mentioned, 'UCHASTNIK');
-      }
     }
 
     for (const [member, rol] of all) {
