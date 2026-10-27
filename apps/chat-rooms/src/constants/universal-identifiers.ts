@@ -34,3 +34,11 @@ export const CHAT_RECORD_SEND_FUNCTION_UNIVERSAL_IDENTIFIER =
 // Фронт-компонент чата в карточке записи.
 export const CARD_CHAT_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
   'eaeccefa-3988-40a7-9dcd-a9877d21687a';
+
+// Логик-функции: досыпают участников при смене ответственного/мастера/исполнителя.
+export const CHAT_PARTICIPANTS_OPPORTUNITY_UNIVERSAL_IDENTIFIER =
+  'd6a1c2f4-5b7e-4c8a-9f03-1a2b3c4d5e61';
+export const CHAT_PARTICIPANTS_REMONT_UNIVERSAL_IDENTIFIER =
+  'd6a1c2f4-5b7e-4c8a-9f03-1a2b3c4d5e62';
+export const CHAT_PARTICIPANTS_TASK_UNIVERSAL_IDENTIFIER =
+  'd6a1c2f4-5b7e-4c8a-9f03-1a2b3c4d5e63';

@@ -263,22 +263,16 @@ export class RecordRoomService {
   }
 
   /**
-   * Кого подтягиваем в комнату при создании.
-   *
-   * Только те, кого назначили осознанно: ответственный (Заказ/Ремонт) или
-   * исполнитель (Задача), мастер ремонта, соисполнители и наблюдатели из связки
-   * «Участник записи». Автор записи в комнату НЕ тянется (решение 26.10.2026):
-   * он прочитает её из карточки, а участником станет, если сам напишет.
+   * Кого назначили осознанно: ответственный (Заказ/Ремонт) или исполнитель
+   * (Задача), мастер ремонта, соисполнители и наблюдатели из связки
+   * «Участник записи». Автор записи сюда не входит (решение 26.10.2026).
    */
-  private async collectParticipants(
+  private async collectAssigned(
     kind: RecordKind,
     record: Row,
-    authorMemberId: string,
   ): Promise<{ memberId: string; rol: string }[]> {
-    const result: { memberId: string; rol: string }[] = [
-      { memberId: authorMemberId, rol: 'VEDUSHCHIY' },
-    ];
-    const seen = new Set<string>([authorMemberId]);
+    const result: { memberId: string; rol: string }[] = [];
+    const seen = new Set<string>();
 
     const push = (memberId: string | null, rol: string) => {
       if (memberId && !seen.has(memberId)) {
@@ -322,6 +316,61 @@ export class RecordRoomService {
     }
 
     return result;
+  }
+
+  /** Участники новой комнаты: автор сообщения (ведущий) + назначенные. */
+  private async collectParticipants(
+    kind: RecordKind,
+    record: Row,
+    authorMemberId: string,
+  ): Promise<{ memberId: string; rol: string }[]> {
+    const assigned = await this.collectAssigned(kind, record);
+
+    return [
+      { memberId: authorMemberId, rol: 'VEDUSHCHIY' },
+      ...assigned.filter((member) => member.memberId !== authorMemberId),
+    ];
+  }
+
+  /**
+   * Досыпает в существующую комнату тех, кого назначили позже
+   * (смена ответственного, исполнителя, мастера, наблюдателей).
+   *
+   * Комнаты нет — ничего не делаем: она появится с первым сообщением.
+   * Старые участники остаются — история не рвётся.
+   */
+  async syncParticipants(recordId: string): Promise<{ chatId: string | null; added: number }> {
+    const resolved = await this.resolve(recordId);
+
+    if (!resolved) {
+      return { chatId: null, added: 0 };
+    }
+
+    const chatId = await this.roomIdFor(resolved.kind, recordId);
+
+    if (!chatId) {
+      return { chatId: null, added: 0 };
+    }
+
+    const assigned = await this.collectAssigned(resolved.kind, resolved.record);
+    let added = 0;
+
+    for (const member of assigned) {
+      if (await this.isParticipant(chatId, member.memberId)) {
+        continue;
+      }
+
+      await this.client.post<unknown>('/rest/chatParticipants', {
+        name: 'Участник диалога',
+        chatId,
+        polzovatelId: member.memberId,
+        rol: member.rol,
+        neprochitano: 0,
+      });
+      added += 1;
+    }
+
+    return { chatId, added };
   }
 
   async memberIdBySotrudnik(sotrudnikId: string): Promise<string | null> {
