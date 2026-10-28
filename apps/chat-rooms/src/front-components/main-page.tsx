@@ -252,10 +252,6 @@ const ChatCenter = () => {
   const [memberQuery, setMemberQuery] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
-  // Страница чата занимает экран целиком: высоту считаем по месту, где стоит виджет.
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const [viewportHeight, setViewportHeight] = useState<number | null>(null);
-
   const activeChatIdRef = useRef<string | null>(null);
   const socketRef = useRef<ChatSocketHandle | null>(null);
 
@@ -269,38 +265,6 @@ const ChatCenter = () => {
   const caretSeqRef = useRef(0);
 
   activeChatIdRef.current = activeChatId;
-
-  useEffect(() => {
-    const measure = () => {
-      const viewport = typeof window === 'undefined' ? 0 : window.innerHeight;
-
-      if (!viewport) {
-        return;
-      }
-
-      let top = 0;
-
-      try {
-        const node = rootRef.current as unknown as {
-          getBoundingClientRect?: () => { top?: number };
-        };
-        const rect = node?.getBoundingClientRect?.();
-
-        if (rect && typeof rect.top === 'number') {
-          top = Math.max(0, rect.top);
-        }
-      } catch {
-        top = 0;
-      }
-
-      setViewportHeight(Math.max(360, viewport - top - 8));
-    };
-
-    measure();
-    window.addEventListener('resize', measure);
-
-    return () => window.removeEventListener('resize', measure);
-  }, []);
 
   const loadDialogs = useCallback(async () => {
     const result = await callRoute<DialogsResponse>('/chat-dialogs');
@@ -776,10 +740,10 @@ const ChatCenter = () => {
 
   return (
     <div
-      ref={rootRef}
       style={{
         display: 'flex',
-        height: viewportHeight ? `${viewportHeight}px` : '100vh',
+        // Высота экрана минус шапка Twenty; страница не прокручивается.
+        height: 'calc(100vh - 96px)',
         minHeight: 0,
         overflow: 'hidden',
         boxSizing: 'border-box',
