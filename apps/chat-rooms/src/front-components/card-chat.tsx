@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+
+import { connectChatSocket } from './chat-socket';
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { SidePanelPages, openSidePanelPage, useSelectedRecordIds } from 'twenty-sdk/front-component';
 
@@ -219,7 +221,7 @@ export const CardChat = () => {
       if (draftRef.current.trim().length === 0) {
         void reload();
       }
-    }, 10000);
+    }, 20000);
 
     return () => clearInterval(timer);
   }, [reload]);
@@ -279,25 +281,37 @@ export const CardChat = () => {
     };
   }, []);
 
-  // Новое сообщение в этом чате: сигнал по вебсокету — обновляем ленту сразу.
+  // Живой канал: сообщение в этом чате приходит мгновенно, опрос — страховка.
   useEffect(() => {
-    const onPing = (event: MessageEvent) => {
-      const data = event.data as { type?: string; chatId?: string } | null;
+    let stop: (() => void) | null = null;
+    let disposed = false;
 
-      if (!data || data.type !== 'crm-chat-ping' || !data.chatId) {
-        return;
-      }
+    void callRoute<{ userId: string | null }>('/chat-me')
+      .then((me) => {
+        if (disposed) {
+          return;
+        }
 
-      if (data.chatId !== roomRef.current?.chatId) {
-        return;
-      }
+        const userId = String(me.userId ?? '');
 
-      void reload();
+        if (!userId) {
+          return;
+        }
+
+        stop = connectChatSocket(FUNCTIONS_BASE, userId, {
+          onChat: (chatId) => {
+            if (chatId === roomRef.current?.chatId) {
+              void reload();
+            }
+          },
+        });
+      })
+      .catch(() => undefined);
+
+    return () => {
+      disposed = true;
+      stop?.();
     };
-
-    window.addEventListener('message', onPing);
-
-    return () => window.removeEventListener('message', onPing);
   }, [reload]);
 
   const updateMentionState = (value: string) => {

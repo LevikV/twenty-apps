@@ -373,6 +373,11 @@ export class ChatService {
     }
   }
 
+  /** Текущий сотрудник: идентификатор пользователя для подписки на сокет. */
+  async me(memberId: string): Promise<{ userId: string | null }> {
+    return { userId: await this.memberUserId(memberId) };
+  }
+
   /** Куда вести по пушу: карточка объекта для чатов сделок, иначе — страница диалогов. */
   private async chatLink(chatId: string): Promise<{ link: string; linkLabel: string }> {
     const fallback = { link: `${CHAT_PAGE_PATH}?chatId=${chatId}`, linkLabel: 'Открыть чат' };

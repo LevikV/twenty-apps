@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+
+import { connectChatSocket } from './chat-socket';
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { SidePanelPages, openSidePanelPage } from 'twenty-sdk/front-component';
 
@@ -357,7 +359,7 @@ const ChatCenter = () => {
   useEffect(() => {
     const timer = setInterval(() => {
       void refresh().catch((caughtError) => setError((caughtError as Error).message));
-    }, 10000);
+    }, 20000);
 
     return () => clearInterval(timer);
   }, [refresh]);
@@ -428,28 +430,46 @@ const ChatCenter = () => {
     void markRead(activeChatId).catch(() => undefined);
   }, [activeChatId, loadMessages, markRead]);
 
-  // Новое сообщение в открытом чате: ядро присылает сигнал по вебсокету,
-  // обёртка пересылает его сюда — перечитываем ленту сразу, без ожидания опроса.
+  // Живой канал: событие по чату приходит мгновенно, опрос — страховка.
   useEffect(() => {
-    const onPing = (event: MessageEvent) => {
-      const data = event.data as { type?: string; chatId?: string } | null;
+    let stop: (() => void) | null = null;
+    let disposed = false;
 
-      if (!data || data.type !== 'crm-chat-ping' || !data.chatId) {
-        return;
-      }
+    void callRoute<{ userId: string | null }>('/chat-me')
+      .then((me) => {
+        if (disposed) {
+          return;
+        }
 
-      if (data.chatId !== activeChatId) {
-        return;
-      }
+        const userId = String(me.userId ?? '');
 
-      void loadMessages(data.chatId).catch(() => undefined);
-      void markRead(data.chatId).catch(() => undefined);
+        if (!userId) {
+          return;
+        }
+
+        stop = connectChatSocket(FUNCTIONS_BASE, userId, {
+          onChat: (chatId) => {
+            if (chatId === activeChatIdRef.current) {
+              void loadMessages(chatId).catch(() => undefined);
+              void markRead(chatId).catch(() => undefined);
+
+              return;
+            }
+
+            void loadDialogs().catch(() => undefined);
+          },
+          onAny: () => {
+            void loadDialogs().catch(() => undefined);
+          },
+        });
+      })
+      .catch(() => undefined);
+
+    return () => {
+      disposed = true;
+      stop?.();
     };
-
-    window.addEventListener('message', onPing);
-
-    return () => window.removeEventListener('message', onPing);
-  }, [activeChatId, loadMessages, markRead]);
+  }, [loadDialogs, loadMessages, markRead]);
 
   const updateMentionState = (value: string) => {
     const atIndex = value.lastIndexOf('@');
