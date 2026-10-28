@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { connectChatSocket } from './chat-socket';
+import { connectChatSocket, type ChatSocketHandle } from './chat-socket';
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { SidePanelPages, openSidePanelPage, useSelectedRecordIds } from 'twenty-sdk/front-component';
 
@@ -183,6 +183,7 @@ export const CardChat = () => {
 
   const draftRef = useRef(draft);
   const roomRef = useRef<RoomState | null>(null);
+  const socketRef = useRef<ChatSocketHandle | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const suppressRef = useRef<{ until: number; expected: string; caret: number } | null>(null);
 
@@ -201,6 +202,10 @@ export const CardChat = () => {
       setRoom(state);
       roomRef.current = state;
       setError(null);
+
+      // Сообщаем сокету, какой чат открыт: при закрытии карточки соединение
+      // оборвётся, и сервер сразу снимет отметку присутствия.
+      socketRef.current?.setChat(state.chatId ?? null);
 
       if (state.chatId) {
         // Отмечаем присутствие: пока карточка открыта, пуш о сообщении не нужен.
@@ -283,7 +288,6 @@ export const CardChat = () => {
 
   // Живой канал: сообщение в этом чате приходит мгновенно, опрос — страховка.
   useEffect(() => {
-    let stop: (() => void) | null = null;
     let disposed = false;
 
     void callRoute<{ userId: string | null }>('/chat-me')
@@ -298,7 +302,7 @@ export const CardChat = () => {
           return;
         }
 
-        stop = connectChatSocket(FUNCTIONS_BASE, userId, {
+        socketRef.current = connectChatSocket(FUNCTIONS_BASE, userId, {
           onChat: (chatId) => {
             if (chatId === roomRef.current?.chatId) {
               void reload();
@@ -310,7 +314,8 @@ export const CardChat = () => {
 
     return () => {
       disposed = true;
-      stop?.();
+      socketRef.current?.close();
+      socketRef.current = null;
     };
   }, [reload]);
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { connectChatSocket } from './chat-socket';
+import { connectChatSocket, type ChatSocketHandle } from './chat-socket';
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { SidePanelPages, openSidePanelPage } from 'twenty-sdk/front-component';
 
@@ -244,6 +244,7 @@ const ChatCenter = () => {
   const [initialChatId] = useState<string | null>(() => readChatIdFromUrl());
 
   const activeChatIdRef = useRef<string | null>(null);
+  const socketRef = useRef<ChatSocketHandle | null>(null);
 
   // Поле ввода принадлежит хосту: чтобы вернуть каретку после подмены текста,
   // пишем значение и позицию прямо в его DOM-узел через мост remote-dom.
@@ -432,7 +433,6 @@ const ChatCenter = () => {
 
   // Живой канал: событие по чату приходит мгновенно, опрос — страховка.
   useEffect(() => {
-    let stop: (() => void) | null = null;
     let disposed = false;
 
     void callRoute<{ userId: string | null }>('/chat-me')
@@ -447,7 +447,7 @@ const ChatCenter = () => {
           return;
         }
 
-        stop = connectChatSocket(FUNCTIONS_BASE, userId, {
+        socketRef.current = connectChatSocket(FUNCTIONS_BASE, userId, {
           onChat: (chatId) => {
             if (chatId === activeChatIdRef.current) {
               void loadMessages(chatId).catch(() => undefined);
@@ -467,9 +467,15 @@ const ChatCenter = () => {
 
     return () => {
       disposed = true;
-      stop?.();
+      socketRef.current?.close();
+      socketRef.current = null;
     };
   }, [loadDialogs, loadMessages, markRead]);
+
+  // Какой диалог открыт — сообщаем сокету: уход снимается сразу при разрыве.
+  useEffect(() => {
+    socketRef.current?.setChat(activeChatId);
+  }, [activeChatId]);
 
   const updateMentionState = (value: string) => {
     const atIndex = value.lastIndexOf('@');

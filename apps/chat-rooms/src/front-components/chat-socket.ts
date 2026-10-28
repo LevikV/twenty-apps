@@ -3,9 +3,19 @@
  *
  * Виджеты живут в изолированной песочнице (не в iframe), поэтому сигнал снаружи
  * до компонента дотянуть нельзя — компонент подключается к сокету ядра сам.
- * Протокол socket.io v4 разбираем вручную: приём только «notify», плюс ответ
- * на пинг, чтобы сервер не закрыл соединение.
+ * Протокол socket.io v4 разбираем вручную: приём «notify», ответ на пинг,
+ * плюс сообщаем серверу, какой чат открыт у человека (chat-presence).
+ *
+ * Благодаря chat-presence присутствие снимается сразу при закрытии карточки:
+ * карточка закрылась — соединение оборвалось — сервер отметил «ушёл».
  */
+
+export type ChatSocketHandle = {
+  /** Какой чат сейчас открыт у человека (null — ни один). */
+  setChat: (chatId: string | null) => void;
+  /** Закрыть соединение. */
+  close: () => void;
+};
 
 type Handlers = {
   /** Пришло событие по конкретному чату. */
@@ -18,10 +28,24 @@ export const connectChatSocket = (
   functionsBase: string,
   userId: string,
   handlers: Handlers,
-): (() => void) => {
+): ChatSocketHandle => {
   let socket: WebSocket | null = null;
   let closed = false;
+  let ready = false;
   let attempts = 0;
+  let chatId: string | null = null;
+
+  const sendPresence = () => {
+    if (!ready || !socket || socket.readyState !== 1 || !chatId) {
+      return;
+    }
+
+    try {
+      socket.send(`42${JSON.stringify(['chat-presence', { chatId }])}`);
+    } catch {
+      // при обрыве отправится после переподключения
+    }
+  };
 
   const connect = () => {
     if (closed || !userId) {
@@ -40,6 +64,7 @@ export const connectChatSocket = (
       return;
     }
 
+    ready = false;
     socket = new WebSocket(
       `wss://${host}/ws/?EIO=4&transport=websocket&userId=${encodeURIComponent(userId)}`,
     );
@@ -51,8 +76,8 @@ export const connectChatSocket = (
     socket.onmessage = (event) => {
       const raw = String(event.data ?? '');
 
-      // 0 — приветствие сервера, 40 — подключение к пространству имён,
-      // 2 — пинг, 42 — событие.
+      // 0 — приветствие сервера, 2 — пинг, 40 — подтверждение подключения
+      // к пространству имён, 42 — событие.
       if (raw.startsWith('0')) {
         socket?.send('40');
 
@@ -61,6 +86,13 @@ export const connectChatSocket = (
 
       if (raw.startsWith('2')) {
         socket?.send('3');
+
+        return;
+      }
+
+      if (raw.startsWith('40')) {
+        ready = true;
+        sendPresence();
 
         return;
       }
@@ -84,6 +116,8 @@ export const connectChatSocket = (
     };
 
     socket.onclose = () => {
+      ready = false;
+
       if (closed) {
         return;
       }
@@ -99,12 +133,20 @@ export const connectChatSocket = (
 
   connect();
 
-  return () => {
-    closed = true;
-    try {
-      socket?.close();
-    } catch {
-      // закрытие не критично
-    }
+  return {
+    setChat: (nextChatId) => {
+      chatId = nextChatId;
+      sendPresence();
+    },
+    close: () => {
+      closed = true;
+      ready = false;
+
+      try {
+        socket?.close();
+      } catch {
+        // закрытие не критично
+      }
+    },
   };
 };
