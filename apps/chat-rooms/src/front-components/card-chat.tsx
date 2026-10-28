@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { callRoute, functionsBase as envFunctionsBase } from './chat-api';
 import { connectChatSocket, type ChatSocketHandle } from './chat-socket';
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { SidePanelPages, openSidePanelPage, useSelectedRecordIds } from 'twenty-sdk/front-component';
@@ -43,47 +44,6 @@ type RoomState = {
   messages: Message[];
 };
 
-const env = (globalThis as unknown as { process?: { env?: Record<string, string> } })
-  .process?.env ?? {};
-const FUNCTIONS_BASE = (env.TWENTY_FUNCTIONS_URL ?? '').replace(/\/+$/, '');
-const APP_TOKEN = env.TWENTY_APP_ACCESS_TOKEN ?? '';
-
-const callRoute = async <T,>(
-  path: string,
-  init?: { method?: 'GET' | 'POST'; body?: unknown },
-): Promise<T> => {
-  const method = init?.method ?? 'GET';
-  const url =
-    method === 'GET'
-      ? `${FUNCTIONS_BASE}${path}${path.includes('?') ? '&' : '?'}_ts=${Date.now()}`
-      : `${FUNCTIONS_BASE}${path}`;
-
-  const response = await fetch(url, {
-    method,
-    headers: {
-      Authorization: `Bearer ${APP_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
-    ...(method === 'POST' ? { body: JSON.stringify(init?.body ?? {}) } : {}),
-  });
-
-  const text = await response.text();
-  let payload: unknown = null;
-
-  try {
-    payload = text ? JSON.parse(text) : null;
-  } catch {
-    payload = null;
-  }
-
-  if (!response.ok) {
-    const message = (payload as { error?: string } | null)?.error;
-
-    throw new Error(message ?? `HTTP ${response.status}: ${text.slice(0, 200)}`);
-  }
-
-  return payload as T;
-};
 
 const formatTime = (iso: string): string =>
   new Date(iso).toLocaleString('ru-RU', {
@@ -302,7 +262,7 @@ export const CardChat = () => {
           return;
         }
 
-        socketRef.current = connectChatSocket(FUNCTIONS_BASE, userId, {
+        socketRef.current = connectChatSocket(envFunctionsBase(), userId, {
           onChat: (chatId) => {
             if (chatId === roomRef.current?.chatId) {
               void reload();
