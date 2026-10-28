@@ -489,8 +489,11 @@ export const CardChat = () => {
         display: 'flex',
         flexDirection: 'column',
         gap: '8px',
-        height: '100%',
-        minHeight: '260px',
+        // Фиксированная высота: лента прокручивается внутри, поле ввода всегда на виду.
+        height: '420px',
+        minHeight: 0,
+        boxSizing: 'border-box',
+        overflow: 'hidden',
         fontFamily: 'Inter, sans-serif',
         color: '#1a1a1a',
       }}
@@ -504,6 +507,7 @@ export const CardChat = () => {
       <div
         style={{
           flex: 1,
+          minHeight: 0,
           overflowY: 'auto',
           display: 'flex',
           flexDirection: 'column',

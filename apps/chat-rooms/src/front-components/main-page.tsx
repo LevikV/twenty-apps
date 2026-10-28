@@ -226,6 +226,8 @@ const readChatIdFromUrl = (): string | null => {
   }
 };
 
+type MemberOption = { id: string; name: string };
+
 const ChatCenter = () => {
   const [myMemberId, setMyMemberId] = useState<string | null>(null);
   const [dialogs, setDialogs] = useState<Dialog[]>([]);
@@ -242,6 +244,17 @@ const ChatCenter = () => {
   const [pendingMentions, setPendingMentions] = useState<MentionView[]>([]);
   const [caretTarget, setCaretTarget] = useState<number | null>(null);
   const [initialChatId] = useState<string | null>(() => readChatIdFromUrl());
+  // «Мои диалоги» — только личные; чаты сделок и задач прячем за включателем.
+  const [showAllChats, setShowAllChats] = useState(false);
+  // Создание личного диалога: выбираем сотрудника из списка.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [members, setMembers] = useState<MemberOption[]>([]);
+  const [memberQuery, setMemberQuery] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
+
+  // Страница чата занимает экран целиком: высоту считаем по месту, где стоит виджет.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [viewportHeight, setViewportHeight] = useState<number | null>(null);
 
   const activeChatIdRef = useRef<string | null>(null);
   const socketRef = useRef<ChatSocketHandle | null>(null);
@@ -256,6 +269,38 @@ const ChatCenter = () => {
   const caretSeqRef = useRef(0);
 
   activeChatIdRef.current = activeChatId;
+
+  useEffect(() => {
+    const measure = () => {
+      const viewport = typeof window === 'undefined' ? 0 : window.innerHeight;
+
+      if (!viewport) {
+        return;
+      }
+
+      let top = 0;
+
+      try {
+        const node = rootRef.current as unknown as {
+          getBoundingClientRect?: () => { top?: number };
+        };
+        const rect = node?.getBoundingClientRect?.();
+
+        if (rect && typeof rect.top === 'number') {
+          top = Math.max(0, rect.top);
+        }
+      } catch {
+        top = 0;
+      }
+
+      setViewportHeight(Math.max(360, viewport - top - 8));
+    };
+
+    measure();
+    window.addEventListener('resize', measure);
+
+    return () => window.removeEventListener('resize', measure);
+  }, []);
 
   const loadDialogs = useCallback(async () => {
     const result = await callRoute<DialogsResponse>('/chat-dialogs');
@@ -664,7 +709,66 @@ const ChatCenter = () => {
     }
   };
 
+  const openPicker = async () => {
+    setPickerOpen(true);
+    setMemberQuery('');
+    setError(null);
+
+    if (members.length > 0) {
+      return;
+    }
+
+    try {
+      const result = await callRoute<{ members: MemberOption[] }>('/chat-members');
+      setMembers(result.members ?? []);
+    } catch (caughtError) {
+      setError((caughtError as Error).message);
+    }
+  };
+
+  const startPersonalChat = async (memberId: string) => {
+    if (isCreating) {
+      return;
+    }
+
+    setIsCreating(true);
+    setError(null);
+
+    try {
+      const result = await callRoute<{ chatId: string }>('/chat-personal-create', {
+        method: 'POST',
+        body: { memberId },
+      });
+
+      await loadDialogs();
+      setPickerOpen(false);
+      setShowAllChats(false);
+
+      if (result.chatId) {
+        setActiveChatId(result.chatId);
+      }
+    } catch (caughtError) {
+      setError((caughtError as Error).message);
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
   const activeChat = dialogs.find((dialog) => dialog.id === activeChatId) ?? null;
+
+  // Открыли чат сделки по ссылке из уведомления — показываем полный список,
+  // иначе выбранного диалога не видно в колонке.
+  useEffect(() => {
+    if (activeChat && activeChat.tip !== 'LICHNY') {
+      setShowAllChats(true);
+    }
+  }, [activeChat]);
+
+  const visibleDialogs = showAllChats
+    ? dialogs
+    : dialogs.filter((dialog) => dialog.tip === 'LICHNY');
+
+  const hiddenCount = dialogs.length - visibleDialogs.length;
 
   if (isLoading) {
     return <div style={{ padding: '24px', color: '#888' }}>Загружаю диалоги…</div>;
@@ -672,10 +776,13 @@ const ChatCenter = () => {
 
   return (
     <div
+      ref={rootRef}
       style={{
         display: 'flex',
-        height: '100%',
-        minHeight: '520px',
+        height: viewportHeight ? `${viewportHeight}px` : '100vh',
+        minHeight: 0,
+        overflow: 'hidden',
+        boxSizing: 'border-box',
         fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         color: '#333',
       }}
@@ -687,12 +794,60 @@ const ChatCenter = () => {
           borderRight: '1px solid #e8e8e8',
           display: 'flex',
           flexDirection: 'column',
+          minHeight: 0,
+          overflow: 'hidden',
           background: '#fafafa',
         }}
       >
-        <div style={{ padding: '16px 16px 8px', fontWeight: 600, fontSize: '14px' }}>
-          Диалоги
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '16px 16px 6px',
+          }}
+        >
+          <span style={{ fontWeight: 600, fontSize: '14px' }}>Мои диалоги</span>
+          <button
+            type="button"
+            onClick={() => void openPicker()}
+            style={{
+              border: '1px solid #d6d6d6',
+              background: '#ffffff',
+              borderRadius: '6px',
+              padding: '4px 8px',
+              fontSize: '12px',
+              color: '#333',
+              cursor: 'pointer',
+            }}
+          >
+            Новый чат
+          </button>
         </div>
+
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '0 16px 10px',
+            fontSize: '12px',
+            color: '#777',
+            cursor: 'pointer',
+            userSelect: 'none',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={showAllChats}
+            onChange={(event) => setShowAllChats(event.target.checked)}
+            style={{ margin: 0, cursor: 'pointer' }}
+          />
+          <span>
+            Все чаты
+            {hiddenCount > 0 && !showAllChats ? ` (скрыто ${hiddenCount})` : ''}
+          </span>
+        </label>
 
         {error && (
           <div
@@ -710,14 +865,89 @@ const ChatCenter = () => {
           </div>
         )}
 
-        <div style={{ overflowY: 'auto', flex: 1 }}>
-          {dialogs.length === 0 && (
-            <div style={{ padding: '16px', fontSize: '13px', color: '#999' }}>
-              У вас пока нет диалогов
+        <div style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
+          {pickerOpen && (
+            <div style={{ padding: '0 12px 12px' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginBottom: '6px',
+                }}
+              >
+                <span style={{ fontSize: '12px', color: '#666' }}>Кому написать</span>
+                <button
+                  type="button"
+                  onClick={() => setPickerOpen(false)}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    color: '#1961ff',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    padding: 0,
+                  }}
+                >
+                  Отмена
+                </button>
+              </div>
+
+              <input
+                type="text"
+                value={memberQuery}
+                onChange={(event) => setMemberQuery(event.target.value)}
+                placeholder="Поиск сотрудника"
+                style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  padding: '6px 8px',
+                  fontSize: '12px',
+                  border: '1px solid #dcdcdc',
+                  borderRadius: '6px',
+                  outline: 'none',
+                  marginBottom: '6px',
+                }}
+              />
+
+              {members
+                .filter((member) =>
+                  member.name.toLowerCase().includes(memberQuery.trim().toLowerCase()),
+                )
+                .map((member) => (
+                  <div
+                    key={member.id}
+                    onClick={() => void startPersonalChat(member.id)}
+                    style={{
+                      padding: '8px',
+                      fontSize: '13px',
+                      borderRadius: '6px',
+                      cursor: isCreating ? 'default' : 'pointer',
+                      color: isCreating ? '#999' : '#333',
+                    }}
+                  >
+                    {member.name}
+                  </div>
+                ))}
+
+              {members.length === 0 && (
+                <div style={{ fontSize: '12px', color: '#999', padding: '8px' }}>
+                  Загружаю сотрудников…
+                </div>
+              )}
             </div>
           )}
 
-          {dialogs.map((dialog) => {
+          {!pickerOpen && visibleDialogs.length === 0 && (
+            <div style={{ padding: '16px', fontSize: '13px', color: '#999' }}>
+              {dialogs.length === 0
+                ? 'У вас пока нет диалогов'
+                : 'Нет личных диалогов. Чаты сделок — включите «Все чаты».'}
+            </div>
+          )}
+
+          {!pickerOpen &&
+            visibleDialogs.map((dialog) => {
             const isActive = dialog.id === activeChatId;
 
             return (
@@ -788,7 +1018,7 @@ const ChatCenter = () => {
         </div>
       </div>
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
         {!activeChat && (
           <div
             style={{
@@ -831,7 +1061,7 @@ const ChatCenter = () => {
               </span>
             </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', minHeight: 0 }}>
               {messages.length === 0 && (
                 <div style={{ fontSize: '13px', color: '#999' }}>
                   Сообщений пока нет — напишите первым

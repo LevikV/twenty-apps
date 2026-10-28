@@ -173,6 +173,99 @@ export class ChatService {
     return { dialogs, names: await this.memberNames() };
   }
 
+  /** Сотрудники, с которыми можно начать личный диалог. */
+  async membersForPicker(): Promise<{ id: string; name: string }[]> {
+    const response = await this.client.get<unknown>('/rest/workspaceMembers', {
+      query: { select: 'id,name', limit: 60 },
+    });
+
+    return rowsOf(response, 'workspaceMembers')
+      .filter((member) => !!member.id)
+      .map((member) => ({ id: String(member.id), name: fullName(member) }))
+      .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
+  }
+
+  /** Личный диалог двух сотрудников: если уже есть — открываем его. */
+  async createPersonal(
+    memberId: string,
+    otherMemberId: string,
+  ): Promise<{ chatId: string; created: boolean }> {
+    if (!memberId || !otherMemberId) {
+      throw new Error('Не выбран собеседник');
+    }
+
+    if (memberId === otherMemberId) {
+      throw new Error('Нельзя начать диалог с самим собой');
+    }
+
+    const existing = await this.findPersonalChat(memberId, otherMemberId);
+
+    if (existing) {
+      return { chatId: existing, created: false };
+    }
+
+    const names = await this.memberNames();
+    const chat = pickCreated(
+      await this.client.post<unknown>('/rest/chats', {
+        name: `${names[memberId] ?? 'Сотрудник'} — ${names[otherMemberId] ?? 'Сотрудник'}`,
+        tip: 'LICHNY',
+        kanal: 'VNUTRENNIY',
+        status: 'OTKRYT',
+      }),
+    );
+
+    if (!chat?.id) {
+      throw new Error('диалог создан, но в ответе нет id');
+    }
+
+    const chatId = String(chat.id);
+    const members: [string, string][] = [
+      [memberId, 'VEDUSHCHIY'],
+      [otherMemberId, 'UCHASTNIK'],
+    ];
+
+    for (const [participantId, rol] of members) {
+      await this.client.post<unknown>('/rest/chatParticipants', {
+        name: 'Участник диалога',
+        chatId,
+        polzovatelId: participantId,
+        rol,
+        neprochitano: 0,
+      });
+    }
+
+    return { chatId, created: true };
+  }
+
+  /** Уже существующий личный чат этих двоих, если он есть. */
+  private async findPersonalChat(
+    memberId: string,
+    otherMemberId: string,
+  ): Promise<string | null> {
+    const mine = new Set(
+      (await this.myParticipations(memberId)).map((row) => asString(row.chatId)).filter(Boolean),
+    );
+    const theirs = (await this.myParticipations(otherMemberId))
+      .map((row) => asString(row.chatId))
+      .filter((chatId): chatId is string => !!chatId && mine.has(chatId));
+
+    if (theirs.length === 0) {
+      return null;
+    }
+
+    const response = await this.client.get<unknown>('/rest/chats', {
+      query: {
+        filter: `id[in]:[${theirs.join(',')}]`,
+        select: 'id,tip',
+        limit: 60,
+      },
+    });
+
+    const chat = rowsOf(response, 'chats').find((row) => asString(row.tip) === 'LICHNY');
+
+    return chat?.id ? String(chat.id) : null;
+  }
+
   async assertParticipant(memberId: string, chatId: string): Promise<void> {
     const participations = await this.myParticipations(memberId);
 

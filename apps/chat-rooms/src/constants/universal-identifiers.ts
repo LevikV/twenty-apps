@@ -45,3 +45,9 @@ export const CHAT_PARTICIPANTS_REMONT_UNIVERSAL_IDENTIFIER =
   'd6a1c2f4-5b7e-4c8a-9f03-1a2b3c4d5e62';
 export const CHAT_PARTICIPANTS_TASK_UNIVERSAL_IDENTIFIER =
   'd6a1c2f4-5b7e-4c8a-9f03-1a2b3c4d5e63';
+
+// Личные диалоги: список сотрудников для выбора и создание нового чата.
+export const CHAT_MEMBERS_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'efd489f7-4467-4937-af7a-b1d67314a5f6';
+export const CHAT_PERSONAL_CREATE_FUNCTION_UNIVERSAL_IDENTIFIER =
+  '1071fa3d-48ba-425d-95da-3947f58d17ef';
