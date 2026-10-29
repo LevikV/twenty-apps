@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { createOne, findFirst, updateOne } from 'src/shared/crm';
+import { createOne, findFirst, findMany, updateOne } from 'src/shared/crm';
 import { REESTR_STATUS, REESTR_TYPE, TASK_STATUS } from 'src/shared/payload';
 import { upsertReestrRow } from 'src/shared/people';
 
@@ -298,7 +298,32 @@ const syncCompany = async (company: Row): Promise<SyncResult> => {
   return { guid, task: result, objectType: 'company', kind: 'company' };
 };
 
-/** `person.created` */
+/** Догон связей, по которым задача не создавалась (у человека не было телефона). */
+const catchUpLinks = async (personId: string): Promise<number> => {
+  const links = (await findMany(
+    'kontaktyKlientov',
+    `kontaktnoeLicoId[eq]:${personId}`,
+    50,
+  )) as Row[];
+
+  let synced = 0;
+
+  for (const link of links) {
+    if (guidOf(link)) {
+      continue;
+    }
+
+    const result = await handleContactLinkCreated(link.id);
+
+    if (result.guid) {
+      synced += 1;
+    }
+  }
+
+  return synced;
+};
+
+/** `person.created` и `person.updated` */
 export const handlePersonCreated = async (
   recordId?: string,
 ): Promise<SyncResult> => {
@@ -312,7 +337,16 @@ export const handlePersonCreated = async (
     return { skipped: 'карточка не найдена' };
   }
 
-  return syncPerson(person);
+  const result = await syncPerson(person);
+
+  if (!result.guid) {
+    return result;
+  }
+
+  // Человек уехал — добираем связи, застрявшие без телефона.
+  const linksSynced = await catchUpLinks(String(person.id));
+
+  return linksSynced ? { ...result, linksSynced } : result;
 };
 
 /** `company.created` */
