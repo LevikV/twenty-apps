@@ -203,12 +203,15 @@ const syncPerson = async (person: Row): Promise<SyncResult> => {
     return { skipped: 'уже синхронизирована', guid: already };
   }
 
-  const guid = await stampGuid('people', 'person', person, `person:${person.id}`);
+  // Имя проверяем ДО записи guid: пустую карточку не помечаем синхронизированной,
+  // иначе дозаполнение именем уже не подхватится.
   const name = fullName(person);
 
   if (!name) {
     return { skipped: 'у карточки нет имени' };
   }
+
+  const guid = await stampGuid('people', 'person', person, `person:${person.id}`);
 
   const payload = {
     guid,
@@ -250,17 +253,18 @@ const syncCompany = async (company: Row): Promise<SyncResult> => {
     return { skipped: 'уже синхронизирована', guid: already };
   }
 
+  const name = String(company.name ?? '').trim();
+
+  if (!name) {
+    return { skipped: 'у компании нет названия' };
+  }
+
   const guid = await stampGuid(
     'companies',
     'company',
     company,
     `company:${company.id}`,
   );
-  const name = String(company.name ?? '').trim();
-
-  if (!name) {
-    return { skipped: 'у компании нет названия' };
-  }
 
   const address = addressText(company.address);
 
