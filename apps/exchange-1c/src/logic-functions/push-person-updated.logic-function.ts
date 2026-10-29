@@ -30,6 +30,6 @@ export default defineLogicFunction({
   handler,
   databaseEventTriggerSettings: {
     eventName: 'person.updated',
-    updatedFields: ["name"],
+    updatedFields: ["name", "phones"],
   },
 });

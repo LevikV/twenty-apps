@@ -203,12 +203,18 @@ const syncPerson = async (person: Row): Promise<SyncResult> => {
     return { skipped: 'уже синхронизирована', guid: already };
   }
 
-  // Имя проверяем ДО записи guid: пустую карточку не помечаем синхронизированной,
-  // иначе дозаполнение именем уже не подхватится.
+  // Обязательные поля проверяем ДО записи guid: неполную карточку не помечаем
+  // синхронизированной, иначе дозаполнение уже не подхватится.
   const name = fullName(person);
 
   if (!name) {
     return { skipped: 'у карточки нет имени' };
+  }
+
+  const phones = phonesOf(person.phones);
+
+  if (phones.length === 0) {
+    return { skipped: 'у контакта нет телефона — в 1С не отправляем' };
   }
 
   const guid = await stampGuid('people', 'person', person, `person:${person.id}`);
@@ -217,7 +223,7 @@ const syncPerson = async (person: Row): Promise<SyncResult> => {
     guid,
     type: 'contact',
     name,
-    phones: phonesOf(person.phones),
+    phones,
     relation_types: relationCodes(person.tipOtnosheniy),
     comment: String(person.kommentariy ?? ''),
     address: addressText(person.adresYuridicheskiy),
@@ -401,6 +407,11 @@ export const handleContactLinkCreated = async (
 
   if (!contact) {
     return { skipped: 'контактное лицо не найдено' };
+  }
+
+  // Контактное лицо тоже физлицо: без телефона в 1С не отправляем.
+  if (phonesOf(contact.phones).length === 0) {
+    return { skipped: 'у контактного лица нет телефона — в 1С не отправляем' };
   }
 
   const guid = uuidV5(`kontakt:${link.id}`);
