@@ -11,8 +11,8 @@ import { createClient, type CreateClientInput } from 'src/shared/create-client';
  * `POST /s/create-client` с телом
  * `{ kind, phone, name, pravovayaForma, tipOtnosheniy, address, comment, link }`.
  *
- * Создаёт карточку от имени приложения, связь «Контакт клиента», строку
- * «Реестра сопоставлений» и задачу `direction = OUT` в очередь обмена.
+ * Создаёт карточку от имени приложения и связь «Контакт клиента». Задачи в очередь
+ * обмена ставит не маршрут, а события базы (`person.created`, `kontaktKlienta.created`).
  * При повторе по тому же номеру карточку не дублирует — возвращает существующую.
  */
 
@@ -78,7 +78,7 @@ export default defineLogicFunction({
   universalIdentifier: CREATE_CLIENT_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER,
   name: 'create-client',
   description:
-    'Создание контакта или компании из звонка: карточка, связь, реестр, задача в 1С',
+    'Создание контакта или компании из звонка: карточка и связь',
   timeoutSeconds: 30,
   handler,
   httpRouteTriggerSettings: {

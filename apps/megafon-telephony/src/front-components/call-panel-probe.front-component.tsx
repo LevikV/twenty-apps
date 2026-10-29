@@ -92,6 +92,22 @@ const TARGET_KIND_LABELS: Record<LinkKind, string> = {
   tender: 'Тендер',
 };
 
+/** Правовая форма — только у компании (как в справочнике объекта). */
+const PRAVOVAYA_FORMA_OPTIONS = [
+  { value: 'YUR_LICO', label: 'Юр. лицо' },
+  { value: 'IP', label: 'ИП' },
+];
+
+/** Тип отношений — общий для контакта и компании. */
+const RELATION_OPTIONS = [
+  { value: 'POKUPATEL', label: 'Покупатель' },
+  { value: 'POSTAVSHCHIK', label: 'Поставщик' },
+  { value: 'PROCHEE', label: 'Прочее' },
+];
+
+/** Найденный владелец связи при создании контакта. */
+type LinkTarget = { kind: 'company' | 'person'; id: string; title: string; subtitle: string };
+
 /** Источники поиска для сопоставления: контакты, компании и сделки. */
 const SEARCH_SOURCES: Record<
   LinkKind,
@@ -386,6 +402,23 @@ const CallPanel = () => {
   /** Расшифровка свёрнута, пока пользователь не раскрыл её. */
   const [showAllTranscript, setShowAllTranscript] = useState(false);
   const [pendingUnlink, setPendingUnlink] = useState<string | null>(null);
+
+  /** Создание карточки из звонка: null — форма закрыта. */
+  const [createKind, setCreateKind] = useState<'contact' | 'company' | null>(null);
+  const [createName, setCreateName] = useState('');
+  const [createPhone, setCreatePhone] = useState('');
+  const [createForma, setCreateForma] = useState('YUR_LICO');
+  const [createRelations, setCreateRelations] = useState<string[]>([]);
+  const [createAddress, setCreateAddress] = useState('');
+  const [createComment, setCreateComment] = useState('');
+  const [createLink, setCreateLink] = useState<{
+    kind: 'company' | 'person';
+    id: string;
+    name: string;
+  } | null>(null);
+  const [linkQuery, setLinkQuery] = useState('');
+  const [linkOptions, setLinkOptions] = useState<LinkTarget[]>([]);
+  const [linkSearching, setLinkSearching] = useState(false);
 
   const api = useCallback(
     (path: string, init?: RequestInit) => {
@@ -859,6 +892,10 @@ const CallPanel = () => {
     setLinkError('');
     setIsSearching(false);
     setPendingUnlink(null);
+    setCreateKind(null);
+    setCreateLink(null);
+    setLinkOptions([]);
+    setLinkQuery('');
   };
 
   /** Поиск: контакты, компании и сделки — как в журнале. */
@@ -1119,6 +1156,373 @@ const CallPanel = () => {
     </button>
   );
 
+  // ── создание контакта или компании из звонка ──────────────────────────────
+
+  const resetCreate = () => {
+    setCreateKind(null);
+    setCreateName('');
+    setCreatePhone('');
+    setCreateForma('YUR_LICO');
+    setCreateRelations([]);
+    setCreateAddress('');
+    setCreateComment('');
+    setCreateLink(null);
+    setLinkQuery('');
+    setLinkOptions([]);
+    setLinkError('');
+  };
+
+  const openCreate = (kind: 'contact' | 'company') => {
+    resetCreate();
+    setCreateKind(kind);
+    setCreatePhone(call?.phone ?? '');
+  };
+
+  /** Поиск владельца связи: компании и контакты по названию/имени и номеру. */
+  const searchLinkTarget = async () => {
+    const text = linkQuery.trim();
+
+    if (text.length < 2) {
+      setLinkError('Введите хотя бы два символа');
+
+      return;
+    }
+
+    setLinkSearching(true);
+    setLinkError('');
+
+    try {
+      const digits = text.replace(/\D/g, '');
+      const companyConditions = [`name[ilike]:%${text}%`];
+      const personConditions = [
+        `name.firstName[ilike]:%${text}%`,
+        `name.lastName[ilike]:%${text}%`,
+      ];
+
+      if (digits.length >= 4) {
+        companyConditions.push(`telefony.primaryPhoneNumber[ilike]:%${digits}%`);
+        personConditions.push(`phones.primaryPhoneNumber[ilike]:%${digits}%`);
+      }
+
+      const [companies, people] = await Promise.all([
+        list<{ id?: string; name?: string }>(
+          `/rest/companies?${new URLSearchParams({
+            filter: `or(${companyConditions.join(',')})`,
+            limit: '6',
+            select: 'id,name',
+          }).toString()}`,
+          'companies',
+        ),
+        list<{
+          id?: string;
+          name?: { firstName?: string; lastName?: string } | null;
+          phones?: { primaryPhoneNumber?: string | null } | null;
+        }>(
+          `/rest/people?${new URLSearchParams({
+            filter: `or(${personConditions.join(',')})`,
+            limit: '6',
+            select: 'id,name,phones',
+          }).toString()}`,
+          'people',
+        ),
+      ]);
+
+      setLinkOptions([
+        ...companies.map((row) => ({
+          kind: 'company' as const,
+          id: String(row.id ?? ''),
+          title: `Компания: ${String(row.name ?? '')}`,
+          subtitle: '',
+        })),
+        ...people.map((row) => ({
+          kind: 'person' as const,
+          id: String(row.id ?? ''),
+          title: `Контакт: ${fullName(row.name)}`,
+          subtitle: formatPhone(row.phones),
+        })),
+      ]);
+    } catch (searchError) {
+      setLinkError(describeError(searchError));
+    } finally {
+      setLinkSearching(false);
+    }
+  };
+
+  /**
+   * Создание карточки и привязка к ней этого звонка.
+   *
+   * Задачи в очередь обмена ставит не панель: их заводят события приложения
+   * «Обмен с 1С» (`person.created`, `kontaktKlienta.created`).
+   */
+  const submitCreate = async () => {
+    if (!createKind || !call) return;
+
+    const name = createName.trim();
+
+    if (!name) {
+      setLinkError(createKind === 'company' ? 'Укажите название' : 'Укажите ФИО');
+
+      return;
+    }
+
+    const phone = createPhone.trim();
+
+    if (!phone) {
+      setLinkError('Укажите телефон');
+
+      return;
+    }
+
+    setLinkBusy(true);
+    setLinkError('');
+
+    try {
+      const createResponse = await api(`${functionsBase}/create-client`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          kind: createKind,
+          phone,
+          name,
+          pravovayaForma: createKind === 'company' ? createForma : undefined,
+          tipOtnosheniy: createRelations,
+          address: createAddress.trim() || undefined,
+          comment: createComment.trim() || undefined,
+          link: createLink ? { kind: createLink.kind, id: createLink.id } : null,
+        }),
+      });
+      const created = (await createResponse.json()) as {
+        ok?: boolean;
+        error?: string;
+        created?: boolean;
+        id?: string;
+        kind?: 'contact' | 'company';
+        name?: string;
+      };
+
+      if (!created.ok || !created.id) {
+        throw new Error(created.error || 'не удалось создать карточку');
+      }
+
+      const createdKind = created.kind ?? createKind;
+      const createdName = created.name || name;
+      const body: Record<string, unknown> = {
+        action: 'linkClient',
+        eventId: call.eventId,
+        callRecordingId: call.id,
+        title: call.title,
+        happensAt: call.startedAt ?? '',
+      };
+
+      if (createdKind === 'company') {
+        body.companyId = created.id;
+        body.displayName = createdName;
+      } else {
+        body.personId = created.id;
+        body.displayName = createdName;
+        body.handle = call.phone;
+      }
+
+      const linkResponse = await api(`${functionsBase}/call-journal-link`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const linked = (await linkResponse.json()) as {
+        ok?: boolean;
+        error?: string;
+      };
+
+      if (!linked.ok) {
+        throw new Error(
+          `карточка создана, но привязать не удалось: ${linked.error ?? ''}`,
+        );
+      }
+
+      setNotice(
+        created.created === false
+          ? `Уже был в базе, привязали: ${createdName}`
+          : `Создано и привязано: ${createdName}`,
+      );
+      resetCreate();
+      closeSearch();
+      await load();
+    } catch (createError) {
+      setLinkError(describeError(createError));
+    } finally {
+      setLinkBusy(false);
+    }
+  };
+
+  /** Форма создания: имя/название, телефон, правовая форма, отношения, адрес, связь. */
+  const createForm = () => (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '6px',
+        padding: '8px',
+        borderRadius: '8px',
+        border: '1px solid rgba(128, 128, 128, 0.45)',
+        background: 'rgba(128, 128, 128, 0.06)',
+      }}
+    >
+      <div style={{ fontSize: '12px', opacity: 0.8 }}>
+        {createKind === 'company' ? 'Новая компания' : 'Новый контакт'}
+      </div>
+
+      <input
+        value={createName}
+        onChange={(event) => setCreateName(event.target.value)}
+        placeholder={createKind === 'company' ? 'Название' : 'ФИО'}
+        style={inputStyle}
+      />
+      <input
+        value={createPhone}
+        onChange={(event) => setCreatePhone(event.target.value)}
+        placeholder="Телефон"
+        style={inputStyle}
+      />
+
+      {createKind === 'company' ? (
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          {PRAVOVAYA_FORMA_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => setCreateForma(option.value)}
+              style={chipStyle(createForma === option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+        {RELATION_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() =>
+              setCreateRelations((prev) =>
+                prev.includes(option.value)
+                  ? prev.filter((value) => value !== option.value)
+                  : [...prev, option.value],
+              )
+            }
+            style={chipStyle(createRelations.includes(option.value))}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+
+      <input
+        value={createAddress}
+        onChange={(event) => setCreateAddress(event.target.value)}
+        placeholder="Адрес"
+        style={inputStyle}
+      />
+      <input
+        value={createComment}
+        onChange={(event) => setCreateComment(event.target.value)}
+        placeholder="Комментарий"
+        style={inputStyle}
+      />
+
+      {createKind === 'contact' ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <div style={{ fontSize: '12px', opacity: 0.75 }}>
+            Связь:{' '}
+            {createLink
+              ? `${createLink.kind === 'company' ? 'компания' : 'контакт'} «${createLink.name}»`
+              : 'как физ. лицо'}
+          </div>
+
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <input
+              value={linkQuery}
+              onChange={(event) => setLinkQuery(event.target.value)}
+              placeholder="Найти компанию или контакт"
+              style={inputStyle}
+            />
+            <button
+              type="button"
+              onClick={() => void searchLinkTarget()}
+              disabled={linkSearching}
+              style={{
+                ...baseStyle,
+                cursor: linkSearching ? 'default' : 'pointer',
+              }}
+            >
+              {linkSearching ? '…' : 'Найти'}
+            </button>
+            {createLink ? (
+              <button type="button" onClick={() => setCreateLink(null)} style={baseStyle}>
+                Сбросить
+              </button>
+            ) : null}
+          </div>
+
+          {linkOptions.length ? (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '3px',
+                maxHeight: '130px',
+                overflowY: 'auto',
+              }}
+            >
+              {linkOptions.map((option) => (
+                <button
+                  key={`${option.kind}:${option.id}`}
+                  type="button"
+                  onClick={() => {
+                    setCreateLink({
+                      kind: option.kind,
+                      id: option.id,
+                      name: option.title.replace(/^[^:]+: /, ''),
+                    });
+                    setLinkOptions([]);
+                    setLinkQuery('');
+                  }}
+                  style={{
+                    textAlign: 'left',
+                    padding: '5px 8px',
+                    borderRadius: '6px',
+                    border: '1px solid rgba(128, 128, 128, 0.3)',
+                    background: 'transparent',
+                    color: 'inherit',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                  }}
+                >
+                  {option.title}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div style={{ display: 'flex', gap: '6px' }}>
+        <button
+          type="button"
+          onClick={() => void submitCreate()}
+          disabled={linkBusy}
+          style={{ ...baseStyle, cursor: linkBusy ? 'default' : 'pointer' }}
+        >
+          {linkBusy ? 'Создаём…' : 'Создать и привязать'}
+        </button>
+        <button type="button" onClick={resetCreate} style={baseStyle}>
+          отмена
+        </button>
+      </div>
+    </div>
+  );
+
   const searchPanel = (target: SearchTarget) => (
     <div
       style={{
@@ -1233,6 +1637,19 @@ const CallPanel = () => {
           ))}
         </div>
       ) : null}
+
+      {target === 'client' && !createKind ? (
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          <button type="button" onClick={() => openCreate('contact')} style={baseStyle}>
+            + Создать контакт
+          </button>
+          <button type="button" onClick={() => openCreate('company')} style={baseStyle}>
+            + Создать компанию
+          </button>
+        </div>
+      ) : null}
+
+      {createKind ? createForm() : null}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
         <span style={{ opacity: 0.7, fontSize: '12px' }}>
