@@ -171,6 +171,83 @@ const addTimeline = async (params: {
   return true;
 };
 
+/** Последние 10 цифр номера — чтобы сравнивать «тот же номер или нет». */
+const digits10 = (value: unknown): string => {
+  const digits = String(value ?? '').replace(/\D/g, '');
+
+  return digits.length >= 10 ? digits.slice(-10) : '';
+};
+
+const PHONE_FIELD = { person: 'phones', company: 'telefony' } as const;
+
+/**
+ * Дописывает номер звонка в карточку клиента, если такого номера там ещё нет:
+ * основной пуст — ставим основным, иначе кладём в дополнительные.
+ */
+const ensureCardPhone = async (
+  kind: 'person' | 'company',
+  id: string,
+  rawPhone: string,
+): Promise<boolean> => {
+  const number = digits10(rawPhone);
+
+  if (!number) {
+    return false;
+  }
+
+  const field = PHONE_FIELD[kind];
+  const path = `${kind === 'person' ? '/rest/people' : '/rest/companies'}/${id}`;
+  const response = (await client.get(path)) as {
+    data?: Record<string, Record<string, unknown> | undefined>;
+  };
+  const record = response?.data?.[kind];
+  const phones = (record?.[field] ?? {}) as {
+    primaryPhoneNumber?: string | null;
+    primaryPhoneCallingCode?: string | null;
+    primaryPhoneCountryCode?: string | null;
+    additionalPhones?: Array<{ number?: string | null }> | null;
+  };
+
+  const primary = String(phones.primaryPhoneNumber ?? '');
+  const additional = Array.isArray(phones.additionalPhones)
+    ? phones.additionalPhones
+    : [];
+
+  const known = [primary, ...additional.map((item) => item?.number)]
+    .map((value) => digits10(value))
+    .filter(Boolean);
+
+  if (known.includes(number)) {
+    return false;
+  }
+
+  if (!primary.trim()) {
+    await client.patch(path, {
+      [field]: {
+        primaryPhoneNumber: number,
+        primaryPhoneCallingCode: '+7',
+        primaryPhoneCountryCode: 'RU',
+      },
+    });
+
+    return true;
+  }
+
+  await client.patch(path, {
+    [field]: {
+      primaryPhoneNumber: primary,
+      primaryPhoneCallingCode: phones.primaryPhoneCallingCode ?? '',
+      primaryPhoneCountryCode: phones.primaryPhoneCountryCode ?? '',
+      additionalPhones: [
+        ...additional,
+        { number, callingCode: '+7', countryCode: 'RU' },
+      ],
+    },
+  });
+
+  return true;
+};
+
 const handler = async (event: RoutePayload) => {
   let body = (event?.body ?? {}) as Record<string, unknown>;
 
@@ -229,6 +306,20 @@ const handler = async (event: RoutePayload) => {
         created = true;
       }
 
+      // Номера в карточке может не быть (пришла из 1С без телефона, были дубли и т.п.):
+      // дописываем номер звонка, чтобы следующий звонок опознавался сам.
+      const callPhone = String(body.phone ?? '') || handle;
+
+      let phoneWritten = false;
+
+      if (personId) {
+        phoneWritten = (await ensureCardPhone('person', personId, callPhone)) || phoneWritten;
+      }
+
+      if (companyId) {
+        phoneWritten = (await ensureCardPhone('company', companyId, callPhone)) || phoneWritten;
+      }
+
       let timeline = false;
 
       if (callRecordingId && personId) {
@@ -256,7 +347,7 @@ const handler = async (event: RoutePayload) => {
           })) || timeline;
       }
 
-      return json({ ok: true, created, timeline });
+      return json({ ok: true, created, timeline, phoneWritten });
     }
 
     // ── клиент: снять привязку (убрать участника) ──────────────────────────

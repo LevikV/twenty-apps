@@ -792,10 +792,19 @@ const CallPanel = () => {
           }
         }
       }
-      const phone =
+      const handlePhone =
         clientRows
           .map((item) => String(item.handle ?? ''))
           .find((value) => value !== '') ?? '';
+
+      // Оператор не всегда отдаёт номер в участнике — тогда берём его из названия
+      // звонка («📞 Исходящий: 9241533759»): именно этот номер видит менеджер.
+      const titleDigits = String((row.title as string | undefined) ?? '')
+        .replace(/\D/g, '')
+        .slice(-11);
+
+      const phone =
+        handlePhone || (titleDigits.length >= 10 ? titleDigits : '');
 
       setCall({
         id: String(row.id ?? ''),
@@ -999,6 +1008,7 @@ const CallPanel = () => {
           body.personId = item.id;
           body.displayName = item.title;
           body.handle = call.phone;
+        body.phone = call.phone;
         }
       } else {
         body.kind = searchKind;
@@ -1321,6 +1331,7 @@ const CallPanel = () => {
         body.personId = created.id;
         body.displayName = createdName;
         body.handle = call.phone;
+        body.phone = call.phone;
       }
 
       const linkResponse = await api(`${functionsBase}/call-journal-link`, {
