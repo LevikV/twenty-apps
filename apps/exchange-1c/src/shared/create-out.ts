@@ -499,6 +499,68 @@ const catchUpLinks = async (personId: string): Promise<number> => {
   return synced;
 };
 
+/**
+ * Правка человека → `UPDATE` по каждой связи, где он контактное лицо.
+ * Связи без guid (ещё не уезжали в 1С) добираем как при создании.
+ */
+const syncPersonLinks = async (
+  person: Row,
+  fields: string[],
+): Promise<{ updated: number; caughtUp: number }> => {
+  const links = (await findMany(
+    'kontaktyKlientov',
+    `kontaktnoeLicoId[eq]:${person.id}`,
+    50,
+  )) as Row[];
+
+  let updated = 0;
+  let caughtUp = 0;
+
+  for (const link of links) {
+    const guid = guidOf(link);
+
+    if (!guid) {
+      const result = await handleContactLinkCreated(link.id);
+
+      if (result.guid) {
+        caughtUp += 1;
+      }
+
+      continue;
+    }
+
+    const owner = await ensureOwner(link.klientCompanyId, link.klientPersonId);
+
+    if (!owner) {
+      continue;
+    }
+
+    const address = addressText(person.adresYuridicheskiy);
+
+    await upsertOutTask({
+      objectType: 'contact',
+      objectGuid: guid,
+      action: 'UPDATE',
+      payload: {
+        guid,
+        owner_guid: owner.guid,
+        name: fullName(person),
+        phones: phonesOf(person.phones),
+        comment: String(person.kommentariy ?? ''),
+        address,
+        source: 'crm',
+        crm_record_id: person.id,
+        change_date: changeDate(person),
+        fields,
+      },
+    });
+
+    updated += 1;
+  }
+
+  return { updated, caughtUp };
+};
+
 /** `person.created` и `person.updated` */
 export const handlePersonCreated = async (
   recordId?: string,
@@ -516,7 +578,18 @@ export const handlePersonCreated = async (
 
   // Карточка уже в 1С — дальше только правки руками.
   if (guidOf(person)) {
-    return syncPersonUpdate(person, updatedFields);
+    const result = await syncPersonUpdate(person, updatedFields);
+
+    if (result.action !== 'UPDATE') {
+      return result;
+    }
+
+    const links = await syncPersonLinks(
+      person,
+      (result.fields as string[] | undefined) ?? [],
+    );
+
+    return links.updated || links.caughtUp ? { ...result, links } : result;
   }
 
   const result = await syncPerson(person);
