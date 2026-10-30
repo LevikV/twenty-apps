@@ -1001,6 +1001,8 @@ const CallPanel = () => {
       };
 
       if (searchFor === 'client') {
+        body.phone = call.phone;
+
         if (searchKind === 'company') {
           body.companyId = item.id;
           body.displayName = item.title;
@@ -1008,7 +1010,6 @@ const CallPanel = () => {
           body.personId = item.id;
           body.displayName = item.title;
           body.handle = call.phone;
-        body.phone = call.phone;
         }
       } else {
         body.kind = searchKind;
@@ -1024,9 +1025,30 @@ const CallPanel = () => {
         ok?: boolean;
         error?: string;
         created?: boolean;
+        phoneWritten?: boolean;
       };
 
       if (!json.ok) throw new Error(json.error || 'не удалось привязать');
+
+      // Маршрут дописал номер звонка в карточку — просим обмен отправить
+      // обновление в 1С (запись сделана приложением, авто-триггер её пропускает).
+      if (json.phoneWritten && searchFor === 'client') {
+        try {
+          const kind = searchKind === 'company' ? 'company' : 'person';
+
+          await api(`${functionsBase}/client-update`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              kind,
+              id: item.id,
+              fields: [kind === 'company' ? 'telefony' : 'phones'],
+            }),
+          });
+        } catch (updateError) {
+          console.error('call-panel: client-update failed', updateError);
+        }
+      }
 
       setNotice(
         json.created === false

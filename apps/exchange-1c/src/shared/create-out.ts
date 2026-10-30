@@ -259,10 +259,11 @@ const stampGuid = async (
 const syncPersonUpdate = async (
   person: Row,
   updatedFields: string[],
+  force = false,
 ): Promise<SyncResult> => {
   const source = updatedBySource(person);
 
-  if (source !== 'MANUAL') {
+  if (!force && source !== 'MANUAL') {
     return {
       skipped: `изменение не ручное (${source ?? 'неизвестен'}) — в 1С не отправляем`,
     };
@@ -379,10 +380,11 @@ const syncPerson = async (person: Row): Promise<SyncResult> => {
 const syncCompanyUpdate = async (
   company: Row,
   updatedFields: string[],
+  force = false,
 ): Promise<SyncResult> => {
   const source = updatedBySource(company);
 
-  if (source !== 'MANUAL') {
+  if (!force && source !== 'MANUAL') {
     return {
       skipped: `изменение не ручное (${source ?? 'неизвестен'}) — в 1С не отправляем`,
     };
@@ -559,6 +561,51 @@ const syncPersonLinks = async (
   }
 
   return { updated, caughtUp };
+};
+
+/**
+ * Поставить в очередь обновление карточки по требованию другого приложения
+ * (например, телефония дописала номер звонка). Проверка автора изменения не
+ * применяется: инициатор — не менеджер, а наш же маршрут.
+ */
+export const queueClientUpdate = async (
+  kind: 'person' | 'company',
+  id: string,
+  fields: string[],
+): Promise<SyncResult> => {
+  if (kind === 'company') {
+    const company = await readRow('companies', 'company', id);
+
+    if (!company) {
+      return { skipped: 'компания не найдена' };
+    }
+
+    if (!guidOf(company)) {
+      return handleCompanyCreated(id, fields);
+    }
+
+    return syncCompanyUpdate(company, fields, true);
+  }
+
+  const person = await readRow('people', 'person', id);
+
+  if (!person) {
+    return { skipped: 'человек не найден' };
+  }
+
+  if (!guidOf(person)) {
+    return handlePersonCreated(id, fields);
+  }
+
+  const result = await syncPersonUpdate(person, fields, true);
+
+  if (result.action !== 'UPDATE') {
+    return result;
+  }
+
+  const links = await syncPersonLinks(person, fields);
+
+  return links.updated || links.caughtUp ? { ...result, links } : result;
 };
 
 /** `person.created` и `person.updated` */
