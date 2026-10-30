@@ -13,13 +13,15 @@ type DatabaseEventPayload = {
   properties?: {
     before?: Record<string, unknown>;
     after?: Record<string, unknown>;
+    updatedFields?: string[];
   };
 };
 
 const handler = async (payload?: DatabaseEventPayload) => {
   const recordId = payload?.recordId ?? payload?.properties?.after?.id;
+  const updatedFields = payload?.properties?.updatedFields ?? [];
 
-  return handlerFn(String(recordId ?? ''));
+  return handlerFn(String(recordId ?? ''), updatedFields);
 };
 
 export default defineLogicFunction({
@@ -30,6 +32,12 @@ export default defineLogicFunction({
   handler,
   databaseEventTriggerSettings: {
     eventName: 'person.updated',
-    updatedFields: ["name", "phones"],
+    updatedFields: [
+      "name",
+      "phones",
+      "kommentariy",
+      "adresYuridicheskiy",
+      "tipOtnosheniy",
+    ],
   },
 });

@@ -4,8 +4,8 @@ import { PUSH_COMPANY_UPDATED_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER } from 'src/co
 import { handleCompanyCreated as handlerFn } from 'src/shared/create-out';
 
 /**
- * `company.updated`: компанию создали без названия и дозаполнили позже.
- * Если `objectGuid` уже стоит — обработчик выходит сразу.
+ * `company.updated`: и дозаполнение пустой карточки, и правки руками по белым полям.
+ * Правки не от `MANUAL` (наши записи и приём из 1С) не отправляем.
  */
 
 type DatabaseEventPayload = {
@@ -13,13 +13,15 @@ type DatabaseEventPayload = {
   properties?: {
     before?: Record<string, unknown>;
     after?: Record<string, unknown>;
+    updatedFields?: string[];
   };
 };
 
 const handler = async (payload?: DatabaseEventPayload) => {
   const recordId = payload?.recordId ?? payload?.properties?.after?.id;
+  const updatedFields = payload?.properties?.updatedFields ?? [];
 
-  return handlerFn(String(recordId ?? ''));
+  return handlerFn(String(recordId ?? ''), updatedFields);
 };
 
 export default defineLogicFunction({
@@ -30,6 +32,13 @@ export default defineLogicFunction({
   handler,
   databaseEventTriggerSettings: {
     eventName: 'company.updated',
-    updatedFields: ["name"],
+    updatedFields: [
+      "name",
+      "telefony",
+      "kommentariy",
+      "address",
+      "tipOtnosheniy",
+      "pravovayaForma",
+    ],
   },
 });

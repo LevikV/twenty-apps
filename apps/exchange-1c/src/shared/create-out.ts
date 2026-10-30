@@ -59,6 +59,10 @@ const readRow = async (
 ): Promise<Row | undefined> =>
   (await findFirst(plural, singular, `id[eq]:${id}`)) as Row | undefined;
 
+/** Автор последнего изменения карточки: `MANUAL`, `API`, `APPLICATION`, … */
+const updatedBySource = (row: Row): string | null =>
+  (row.updatedBy as { source?: string | null } | undefined)?.source ?? null;
+
 const guidOf = (row: Row | undefined): string =>
   String(row?.objectGuid ?? '').trim();
 
@@ -129,6 +133,37 @@ const relationCodes = (values: unknown): string[] => {
     .filter(Boolean);
 };
 
+/**
+ * Белые списки: какие поля карточки уходят в 1С при обновлении
+ * (метаданное имя поля Twenty → поле payload).
+ * Согласовано 30.10.2026; приём в 1С — отдельная сторона.
+ */
+const OUT_FIELDS_PERSON: Record<string, string> = {
+  name: 'name',
+  phones: 'phones',
+  kommentariy: 'comment',
+  adresYuridicheskiy: 'address',
+  tipOtnosheniy: 'relation_types',
+};
+
+const OUT_FIELDS_COMPANY: Record<string, string> = {
+  name: 'name',
+  telefony: 'phones',
+  kommentariy: 'comment',
+  address: 'addresses',
+  tipOtnosheniy: 'relation_types',
+  pravovayaForma: 'type',
+};
+
+/** changedFields → поля payload (без повторов). */
+const fieldsOf = (
+  updatedFields: string[],
+  map: Record<string, string>,
+): string[] =>
+  Array.from(
+    new Set(updatedFields.map((field) => map[field]).filter(Boolean)),
+  );
+
 const companyType = (pravovayaForma: unknown): string =>
   String(pravovayaForma ?? '') === 'IP' ? 'ip' : 'legal';
 
@@ -141,20 +176,42 @@ const changeDate = (row: Row): string =>
 const upsertOutTask = async (params: {
   objectType: string;
   objectGuid: string;
-  action: 'CREATE' | 'DELETE';
+  action: 'CREATE' | 'UPDATE' | 'DELETE';
   payload: Record<string, unknown>;
 }): Promise<'created' | 'updated'> => {
   const open = (await findFirst(
     QUEUE_PLURAL,
     QUEUE_SINGULAR,
     `direction[eq]:OUT,objectGuid[eq]:${params.objectGuid},status[in]:[PENDING,PROCESSING]`,
-  )) as Row | undefined;
+  )) as (Row & { action?: string; payload?: { fields?: unknown } }) | undefined;
 
   if (open?.id) {
+    // Слияние как у ремонтов: вторая правка не должна затирать список полей первой —
+    // 1С пишет только то, что перечислено в `fields`, а значения берутся свежие.
+    const previousFields = Array.isArray(open.payload?.fields)
+      ? (open.payload.fields as unknown[]).filter(
+          (field): field is string => typeof field === 'string',
+        )
+      : [];
+
+    const nextFields = Array.isArray(params.payload.fields)
+      ? (params.payload.fields as string[])
+      : [];
+
+    const fields = Array.from(new Set([...previousFields, ...nextFields]));
+
+    // `CREATE` не превращаем в `UPDATE`: в 1С записи ещё нет, обновлять нечего.
+    const action =
+      open.action === 'DELETE'
+        ? 'DELETE'
+        : open.action === 'CREATE' && params.action !== 'DELETE'
+          ? 'CREATE'
+          : params.action;
+
     await updateOne(QUEUE_PLURAL, QUEUE_SINGULAR, String(open.id), {
-      action: params.action,
+      action,
       status: TASK_STATUS.pending,
-      payload: params.payload,
+      payload: fields.length > 0 ? { ...params.payload, fields } : params.payload,
       errorText: null,
     });
 
@@ -193,6 +250,73 @@ const stampGuid = async (
   await updateOne(plural, singular, row.id, { objectGuid: guid });
 
   return guid;
+};
+
+/**
+ * Обновление уже синхронизированного человека: правка руками → задача `UPDATE`.
+ * Анти-эхо как у ремонтов: изменения не от `MANUAL` (наши записи, приём из 1С) не отправляем.
+ */
+const syncPersonUpdate = async (
+  person: Row,
+  updatedFields: string[],
+): Promise<SyncResult> => {
+  const source = updatedBySource(person);
+
+  if (source !== 'MANUAL') {
+    return {
+      skipped: `изменение не ручное (${source ?? 'неизвестен'}) — в 1С не отправляем`,
+    };
+  }
+
+  const fields = fieldsOf(updatedFields, OUT_FIELDS_PERSON);
+
+  if (fields.length === 0) {
+    return { skipped: 'изменены поля вне белого списка' };
+  }
+
+  const name = fullName(person);
+
+  if (!name) {
+    return { skipped: 'у карточки нет имени' };
+  }
+
+  const phones = phonesOf(person.phones);
+
+  if (phones.length === 0) {
+    return { skipped: 'у контакта нет телефона — в 1С не отправляем' };
+  }
+
+  const guid = guidOf(person);
+
+  const payload = {
+    guid,
+    type: 'contact',
+    name,
+    phones,
+    relation_types: relationCodes(person.tipOtnosheniy),
+    comment: String(person.kommentariy ?? ''),
+    address: addressText(person.adresYuridicheskiy),
+    source: 'crm',
+    crm_record_id: person.id,
+    change_date: changeDate(person),
+    fields,
+  };
+
+  const task = await upsertOutTask({
+    objectType: 'company',
+    objectGuid: guid,
+    action: 'UPDATE',
+    payload,
+  });
+
+  return {
+    guid,
+    task,
+    action: 'UPDATE',
+    fields,
+    objectType: 'company',
+    kind: 'contact-fizlico',
+  };
 };
 
 /** Человек → контрагент-физлицо. */
@@ -249,6 +373,58 @@ const syncPerson = async (person: Row): Promise<SyncResult> => {
   });
 
   return { guid, task: result, objectType: 'company', kind: 'contact-fizlico' };
+};
+
+/** Обновление уже синхронизированной компании (анти-эхо как у ремонтов). */
+const syncCompanyUpdate = async (
+  company: Row,
+  updatedFields: string[],
+): Promise<SyncResult> => {
+  const source = updatedBySource(company);
+
+  if (source !== 'MANUAL') {
+    return {
+      skipped: `изменение не ручное (${source ?? 'неизвестен'}) — в 1С не отправляем`,
+    };
+  }
+
+  const fields = fieldsOf(updatedFields, OUT_FIELDS_COMPANY);
+
+  if (fields.length === 0) {
+    return { skipped: 'изменены поля вне белого списка' };
+  }
+
+  const name = String(company.name ?? '').trim();
+
+  if (!name) {
+    return { skipped: 'у компании нет названия' };
+  }
+
+  const address = addressText(company.address);
+  const guid = guidOf(company);
+
+  const payload = {
+    guid,
+    name,
+    type: companyType(company.pravovayaForma),
+    relation_types: relationCodes(company.tipOtnosheniy),
+    phones: phonesOf(company.telefony),
+    comment: String(company.kommentariy ?? ''),
+    addresses: address ? [{ type: 'legal', value: address }] : [],
+    source: 'crm',
+    crm_record_id: company.id,
+    change_date: changeDate(company),
+    fields,
+  };
+
+  const task = await upsertOutTask({
+    objectType: 'company',
+    objectGuid: guid,
+    action: 'UPDATE',
+    payload,
+  });
+
+  return { guid, task, action: 'UPDATE', fields, objectType: 'company' };
 };
 
 /** Компания → контрагент. */
@@ -326,6 +502,7 @@ const catchUpLinks = async (personId: string): Promise<number> => {
 /** `person.created` и `person.updated` */
 export const handlePersonCreated = async (
   recordId?: string,
+  updatedFields: string[] = [],
 ): Promise<SyncResult> => {
   if (!recordId) {
     return { skipped: 'в событии нет recordId' };
@@ -335,6 +512,11 @@ export const handlePersonCreated = async (
 
   if (!person) {
     return { skipped: 'карточка не найдена' };
+  }
+
+  // Карточка уже в 1С — дальше только правки руками.
+  if (guidOf(person)) {
+    return syncPersonUpdate(person, updatedFields);
   }
 
   const result = await syncPerson(person);
@@ -349,9 +531,10 @@ export const handlePersonCreated = async (
   return linksSynced ? { ...result, linksSynced } : result;
 };
 
-/** `company.created` */
+/** `company.created` и `company.updated` */
 export const handleCompanyCreated = async (
   recordId?: string,
+  updatedFields: string[] = [],
 ): Promise<SyncResult> => {
   if (!recordId) {
     return { skipped: 'в событии нет recordId' };
@@ -361,6 +544,10 @@ export const handleCompanyCreated = async (
 
   if (!company) {
     return { skipped: 'компания не найдена' };
+  }
+
+  if (guidOf(company)) {
+    return syncCompanyUpdate(company, updatedFields);
   }
 
   return syncCompany(company);
