@@ -85,6 +85,7 @@ const addTimeline = async (params: {
   targetRecordId: string;
   targetField: 'targetPersonId' | 'targetCompanyId';
   callRecordingId: string;
+  eventId?: string;
   happensAt: string;
   title: string;
 }): Promise<boolean> => {
@@ -93,16 +94,61 @@ const addTimeline = async (params: {
     targetRecordId,
     targetField,
     callRecordingId,
+    eventId,
     happensAt,
     title,
   } = params;
 
-  const response = await client.get<unknown>('/rest/timelineActivities', {
-    query: { filter: `linkedRecordId[eq]:"${callRecordingId}"`, limit: 60 },
-  });
-  const existing = rowsOf(response, 'timelineActivities');
+  // Ищем строки и по записи звонка, и по событию: Twenty сам пишет строку
+  // «участник добавлен» со ссылкой на событие, и без этой проверки в ленте
+  // оказывались две записи про один звонок.
+  const byRecording = rowsOf(
+    await client.get<unknown>('/rest/timelineActivities', {
+      query: { filter: `linkedRecordId[eq]:"${callRecordingId}"`, limit: 100 },
+    }),
+    'timelineActivities',
+  );
+  const byEvent = eventId
+    ? rowsOf(
+        await client.get<unknown>('/rest/timelineActivities', {
+          query: { filter: `linkedRecordId[eq]:"${eventId}"`, limit: 100 },
+        }),
+        'timelineActivities',
+      )
+    : [];
 
-  if (existing.some((row) => row[targetField] === targetRecordId)) return false;
+  const seen = new Set<string>();
+  const existing = [...byRecording, ...byEvent].filter((row) => {
+    if (row[targetField] !== targetRecordId) return false;
+    const id = String(row.id ?? '');
+
+    if (!id || seen.has(id)) return false;
+
+    seen.add(id);
+
+    return true;
+  });
+
+  if (existing.length > 0) {
+    // Оставляем одну строку: приоритет у той, что ссылается на запись звонка —
+    // из неё открывается сам звонок, а не просто событие календаря.
+    const keep =
+      existing.find((row) => row.linkedRecordId === callRecordingId) ?? existing[0];
+
+    await client.patch(`/rest/timelineActivities/${keep.id}`, {
+      happensAt,
+      linkedRecordCachedName: title,
+    });
+
+    // Лишние строки про этот же звонок (дубль от Twenty) убираем.
+    for (const row of existing) {
+      if (row.id && row.id !== keep.id) {
+        await client.delete(`/rest/timelineActivities/${row.id}`);
+      }
+    }
+
+    return false;
+  }
 
   const created = await createTimelineActivity({
     timelineActivityTypeUniversalIdentifier: TIMELINE_ACTIVITY_TYPE_UNIVERSAL_IDENTIFIER,
@@ -191,6 +237,7 @@ const handler = async (event: RoutePayload) => {
           targetRecordId: personId,
           targetField: 'targetPersonId',
           callRecordingId,
+          eventId,
           happensAt,
           title,
         });
@@ -203,6 +250,7 @@ const handler = async (event: RoutePayload) => {
             targetRecordId: companyId,
             targetField: 'targetCompanyId',
             callRecordingId,
+            eventId,
             happensAt,
             title,
           })) || timeline;
@@ -254,6 +302,7 @@ const handler = async (event: RoutePayload) => {
           targetRecordId: targetId,
           targetField: 'targetPersonId',
           callRecordingId,
+          eventId,
           happensAt,
           title,
         });
