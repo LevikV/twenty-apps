@@ -1,33 +1,29 @@
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { defineFrontComponent } from 'twenty-sdk/define';
 import {
   enqueueSnackbar,
-  getApplicationVariable,
-  openSidePanelPage,
-  SidePanelPages,
   useSelectedRecordIds,
 } from 'twenty-sdk/front-component';
 import { RestApiClient } from 'twenty-client-sdk/rest';
-import { Avatar } from 'twenty-ui/data-display';
-import { IconCheck, IconPencil, IconPlus } from 'twenty-ui/icon';
+import { IconTrash } from 'twenty-ui/icon';
 import { Button, IconButton, SearchInput } from 'twenty-ui/input';
 import { useTheme } from 'twenty-ui/theme-constants';
 
-import {
-  CARD_FIELDS_VARIABLE_KEY,
-  DEFAULT_CARD_FIELDS,
-  SHOW_AVATAR_VARIABLE_KEY,
-  SORT_ORDER_VARIABLE_KEY,
-} from 'src/constants/application-variables';
 import { RELATION_CARDS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
+
+/**
+ * Контактные лица контрагента.
+ *
+ * Один виджет на две карточки:
+ *  • компания — её контактные лица (записи связи, владелец = эта компания);
+ *  • контакт — два блока: его собственные контактные лица и места, где он сам
+ *    используется как контактное лицо.
+ *
+ * Работает через объект связи `kontaktKlienta` (поля `klientCompany` /
+ * `klientPerson` / `kontaktnoeLico`), а не через нативное `person.companyId`.
+ * Менять владельца у существующей связи нельзя: перенос — только удалить и создать.
+ */
 
 type FullNameField = {
   firstName?: string | null;
@@ -43,36 +39,32 @@ type PhonesField = {
   }> | null;
 };
 
-type EmailsField = {
-  primaryEmail?: string | null;
-  additionalEmails?: string[] | null;
-};
-
-type AddressField = {
-  addressStreet1?: string | null;
-  addressStreet2?: string | null;
-  addressCity?: string | null;
-  addressState?: string | null;
-  addressPostcode?: string | null;
-  addressCountry?: string | null;
-};
-
-type PersonRecord = {
+type PersonLite = {
   id: string;
-  createdAt?: string | null;
   name?: FullNameField | null;
   phones?: PhonesField | null;
-  emails?: EmailsField | null;
-  kommentariy?: string | null;
   jobTitle?: string | null;
-  adresYuridicheskiy?: AddressField | null;
-  tipOtnosheniy?: string[] | null;
-  avatarUrl?: string | null;
+};
+
+type LinkRecord = {
+  id: string;
+  name?: string | null;
+  dolzhnost?: string | null;
+  objectGuid?: string | null;
+  klientCompanyId?: string | null;
+  klientPersonId?: string | null;
+  kontaktnoeLicoId?: string | null;
+};
+
+type LinksResponse = {
+  data?: {
+    kontaktyKlientov?: LinkRecord[];
+  };
 };
 
 type PeopleResponse = {
   data?: {
-    people?: PersonRecord[];
+    people?: PersonLite[];
   };
 };
 
@@ -84,11 +76,18 @@ type CreatePersonResponse = {
   };
 };
 
-const PEOPLE_LIMIT = 200;
-const PICKER_RESULT_LIMIT = 20;
-const SEARCH_DEBOUNCE_MS = 300;
+type CompaniesResponse = {
+  data?: {
+    companies?: Array<{ id: string; name?: string | null }>;
+  };
+};
 
-const CHECKBOX_SIZE_IN_PX = 16;
+type Mode = 'company' | 'person' | 'unknown';
+type PickerKind = 'contact' | 'owner';
+
+const LIMIT = 200;
+const PICKER_LIMIT = 20;
+const SEARCH_DEBOUNCE_MS = 300;
 
 const joinNonEmpty = (parts: Array<string | null | undefined>): string =>
   parts
@@ -96,13 +95,13 @@ const joinNonEmpty = (parts: Array<string | null | undefined>): string =>
     .join(' ')
     .trim();
 
-const getPersonName = (person: PersonRecord): string =>
-  joinNonEmpty([person.name?.lastName, person.name?.firstName]) || 'Без имени';
+const getPersonName = (person?: PersonLite | null): string =>
+  joinNonEmpty([person?.name?.lastName, person?.name?.firstName]) || 'Без имени';
 
-const getPersonPhones = (person: PersonRecord): string[] => {
+const getPersonPhones = (person?: PersonLite | null): string[] => {
   const phones: string[] = [];
 
-  if (person.phones?.primaryPhoneNumber) {
+  if (person?.phones?.primaryPhoneNumber) {
     phones.push(
       joinNonEmpty([
         person.phones.primaryPhoneCallingCode,
@@ -111,7 +110,7 @@ const getPersonPhones = (person: PersonRecord): string[] => {
     );
   }
 
-  for (const additional of person.phones?.additionalPhones ?? []) {
+  for (const additional of person?.phones?.additionalPhones ?? []) {
     if (additional?.number) {
       phones.push(joinNonEmpty([additional.callingCode, additional.number]));
     }
@@ -120,26 +119,10 @@ const getPersonPhones = (person: PersonRecord): string[] => {
   return phones;
 };
 
-const getPersonEmails = (person: PersonRecord): string[] => {
-  const emails: string[] = [];
-
-  if (person.emails?.primaryEmail) {
-    emails.push(person.emails.primaryEmail);
-  }
-
-  for (const additional of person.emails?.additionalEmails ?? []) {
-    if (additional) {
-      emails.push(additional);
-    }
-  }
-
-  return emails;
-};
-
 const sanitizeSearchTerm = (term: string): string =>
   term.replace(/[:%,()[\]{}]/g, ' ').replace(/\s+/g, ' ').trim();
 
-const buildSearchFilter = (term: string): string => {
+const buildPeopleSearchFilter = (term: string): string => {
   const cleanTerm = sanitizeSearchTerm(term);
 
   if (!cleanTerm) {
@@ -152,10 +135,19 @@ const buildSearchFilter = (term: string): string => {
     'or(',
     `name.firstName[ilike]:${pattern},`,
     `name.lastName[ilike]:${pattern},`,
-    `phones.primaryPhoneNumber[ilike]:${pattern},`,
-    `emails.primaryEmail[ilike]:${pattern}`,
+    `phones.primaryPhoneNumber[ilike]:${pattern}`,
     ')',
   ].join('');
+};
+
+const buildCompanySearchFilter = (term: string): string => {
+  const cleanTerm = sanitizeSearchTerm(term);
+
+  if (!cleanTerm) {
+    return '';
+  }
+
+  return `name[ilike]:%${cleanTerm}%`;
 };
 
 const normalizePhone = (raw: string): string => {
@@ -173,10 +165,6 @@ const normalizePhone = (raw: string): string => {
 
   if (digits.length === 10) {
     return `+7${digits}`;
-  }
-
-  if (digits.length === 12 && digits[0] === '7') {
-    return `+${digits}`;
   }
 
   return trimmed;
@@ -198,94 +186,95 @@ const splitSearchTermIntoName = (
   return { firstName: parts.slice(1).join(' '), lastName: parts[0] };
 };
 
-const readConfiguredStringArray = (key: string): string[] | null => {
-  const raw = getApplicationVariable(key) as unknown;
+const LINK_SELECT =
+  'id,name,dolzhnost,objectGuid,klientCompanyId,klientPersonId,kontaktnoeLicoId';
 
-  if (Array.isArray(raw)) {
-    return raw.map((item) => String(item));
-  }
+const fetchLinks = async (
+  api: RestApiClient,
+  filter: string,
+): Promise<LinkRecord[]> => {
+  const response = await api.get<LinksResponse>('/rest/kontaktyKlientov', {
+    query: { filter, limit: LIMIT, select: LINK_SELECT },
+  });
 
-  if (typeof raw !== 'string' || raw.trim() === '') {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(raw);
-
-    if (Array.isArray(parsed)) {
-      return parsed.map((item) => String(item));
-    }
-  } catch {
-    // значение может быть простым списком через запятую
-  }
-
-  return raw
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return response?.data?.kontaktyKlientov ?? [];
 };
 
-const readConfiguredCardFields = (): string[] => {
-  const configured = readConfiguredStringArray(CARD_FIELDS_VARIABLE_KEY);
-
-  return configured && configured.length > 0
-    ? configured
-    : DEFAULT_CARD_FIELDS;
-};
-
-const readShowAvatar = (): boolean =>
-  getApplicationVariable(SHOW_AVATAR_VARIABLE_KEY) !== 'false';
-
-const readSortOrder = (): 'name' | 'newest' =>
-  getApplicationVariable(SORT_ORDER_VARIABLE_KEY) === 'newest'
-    ? 'newest'
-    : 'name';
-
-const getAddressLines = (address?: AddressField | null): string[] => {
-  if (!address) {
+const fetchPeople = async (
+  api: RestApiClient,
+  ids: string[],
+): Promise<PersonLite[]> => {
+  if (ids.length === 0) {
     return [];
   }
 
-  return [
-    joinNonEmpty([address.addressPostcode, address.addressCity]),
-    joinNonEmpty([address.addressStreet1, address.addressStreet2]),
-    joinNonEmpty([address.addressState, address.addressCountry]),
-  ].filter(Boolean);
+  const response = await api.get<PeopleResponse>('/rest/people', {
+    query: {
+      filter: `id[in]:[${ids.join(',')}]`,
+      limit: LIMIT,
+      select: 'id,name,phones,jobTitle',
+    },
+  });
+
+  return response?.data?.people ?? [];
 };
 
-const getMultiselectValues = (values?: string[] | null): string[] =>
-  (values ?? []).filter((value): value is string => Boolean(value));
+const fetchCompanyNames = async (
+  api: RestApiClient,
+  ids: string[],
+): Promise<Array<{ id: string; name?: string | null }>> => {
+  if (ids.length === 0) {
+    return [];
+  }
 
-const RelationCards = () => {
+  const response = await api.get<CompaniesResponse>('/rest/companies', {
+    query: {
+      filter: `id[in]:[${ids.join(',')}]`,
+      limit: LIMIT,
+      select: 'id,name',
+    },
+  });
+
+  return response?.data?.companies ?? [];
+};
+
+const ContactPersons = () => {
   const theme = useTheme();
   const [recordId] = useSelectedRecordIds();
 
-  const cardFields = useMemo(() => readConfiguredCardFields(), []);
-  const showAvatar = useMemo(() => readShowAvatar(), []);
-  const sortOrder = useMemo(() => readSortOrder(), []);
+  const [mode, setMode] = useState<Mode>('unknown');
+  const [links, setLinks] = useState<LinkRecord[]>([]);
+  const [usage, setUsage] = useState<LinkRecord[]>([]);
+  const [persons, setPersons] = useState<Record<string, PersonLite>>({});
+  const [ownerNames, setOwnerNames] = useState<Record<string, string>>({});
 
-  const [people, setPeople] = useState<PersonRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [pendingIds, setPendingIds] = useState<string[]>([]);
 
-  const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [pickerKind, setPickerKind] = useState<PickerKind | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<PersonRecord[]>([]);
+  const [searchResults, setSearchResults] = useState<
+    Array<{ id: string; title: string; subtitle: string }>
+  >([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [searchRefreshKey, setSearchRefreshKey] = useState(0);
-  const [pendingPersonIds, setPendingPersonIds] = useState<string[]>([]);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const [isCreateFormOpen, setIsCreateFormOpen] = useState(false);
   const [formFirstName, setFormFirstName] = useState('');
   const [formLastName, setFormLastName] = useState('');
   const [formPhone, setFormPhone] = useState('');
-  const [formEmail, setFormEmail] = useState('');
-  const [formComment, setFormComment] = useState('');
   const [isCreating, setIsCreating] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [hoveredPersonId, setHoveredPersonId] = useState<string | null>(null);
-  const insideInteractionRef = useRef(false);
+
   const pickerOpenedAtRef = useRef(0);
+  const insideInteractionRef = useRef(false);
+
+  const closePicker = useCallback(() => {
+    setPickerKind(null);
+    setIsCreateFormOpen(false);
+    setSearchQuery('');
+    setSearchResults([]);
+  }, []);
 
   const markInsideInteraction = useCallback(() => {
     insideInteractionRef.current = true;
@@ -295,28 +284,12 @@ const RelationCards = () => {
     }, 250);
   }, []);
 
-  const closePicker = useCallback(() => {
-    setIsCreateFormOpen(false);
-    setIsPickerOpen(false);
-  }, []);
-
-  const handleSearchBlur = useCallback(() => {
-    setTimeout(() => {
-      if (insideInteractionRef.current) {
-        return;
-      }
-
-      if (Date.now() - pickerOpenedAtRef.current < 500) {
-        return;
-      }
-
-      closePicker();
-    }, 150);
-  }, [closePicker]);
-
-  const loadRelatedPeople = useCallback(async () => {
+  const loadAll = useCallback(async () => {
     if (!recordId) {
-      setPeople([]);
+      setMode('unknown');
+      setLinks([]);
+      setUsage([]);
+
       return;
     }
 
@@ -324,31 +297,94 @@ const RelationCards = () => {
     setErrorMessage(null);
 
     try {
-      const response = await new RestApiClient().get<PeopleResponse>(
-        '/rest/people',
+      const api = new RestApiClient();
+
+      const companyResponse = await api.get<CompaniesResponse>(
+        '/rest/companies',
         {
-          query: {
-            limit: PEOPLE_LIMIT,
-            filter: `companyId[eq]:${recordId}`,
-          },
+          query: { filter: `id[eq]:${recordId}`, limit: 1, select: 'id,name' },
         },
       );
 
-      setPeople(response?.data?.people ?? []);
+      const isCompany = (companyResponse?.data?.companies ?? []).length > 0;
+
+      let ownLinks: LinkRecord[] = [];
+      let usageLinks: LinkRecord[] = [];
+
+      if (isCompany) {
+        ownLinks = await fetchLinks(api, `klientCompanyId[eq]:${recordId}`);
+      } else {
+        ownLinks = await fetchLinks(api, `klientPersonId[eq]:${recordId}`);
+        usageLinks = await fetchLinks(api, `kontaktnoeLicoId[eq]:${recordId}`);
+      }
+
+      const allLinks = [...ownLinks, ...usageLinks];
+
+      const personIds = Array.from(
+        new Set(
+          allLinks
+            .map((link) => String(link.kontaktnoeLicoId ?? ''))
+            .filter(Boolean),
+        ),
+      );
+
+      const ownerPersonIds = Array.from(
+        new Set(
+          allLinks
+            .map((link) => String(link.klientPersonId ?? ''))
+            .filter(Boolean),
+        ),
+      );
+
+      const ownerCompanyIds = Array.from(
+        new Set(
+          allLinks
+            .map((link) => String(link.klientCompanyId ?? ''))
+            .filter(Boolean),
+        ),
+      );
+
+      const [personRows, ownerPersonRows, ownerCompanyRows] = await Promise.all([
+        fetchPeople(api, [...personIds, ...ownerPersonIds]),
+        fetchPeople(api, ownerPersonIds),
+        fetchCompanyNames(api, ownerCompanyIds),
+      ]);
+
+      const personMap: Record<string, PersonLite> = {};
+
+      for (const person of [...personRows, ...ownerPersonRows]) {
+        personMap[person.id] = person;
+      }
+
+      const ownerMap: Record<string, string> = {};
+
+      for (const person of ownerPersonRows) {
+        ownerMap[person.id] = getPersonName(person);
+      }
+
+      for (const company of ownerCompanyRows) {
+        ownerMap[company.id] = String(company.name ?? '').trim() || 'Без названия';
+      }
+
+      setMode(isCompany ? 'company' : 'person');
+      setLinks(ownLinks);
+      setUsage(usageLinks);
+      setPersons(personMap);
+      setOwnerNames(ownerMap);
     } catch (error) {
-      console.error('relation-cards: failed to load related people', error);
-      setErrorMessage('Не удалось загрузить контакты');
+      console.error('contact-persons: load failed', error);
+      setErrorMessage('Не удалось загрузить контактные лица');
     } finally {
       setIsLoading(false);
     }
   }, [recordId]);
 
   useEffect(() => {
-    void loadRelatedPeople();
-  }, [loadRelatedPeople]);
+    void loadAll();
+  }, [loadAll]);
 
   useEffect(() => {
-    if (!isPickerOpen || !recordId) {
+    if (!pickerKind) {
       return;
     }
 
@@ -357,22 +393,57 @@ const RelationCards = () => {
     setIsSearching(true);
 
     const timer = setTimeout(() => {
-      const filter = buildSearchFilter(searchQuery);
+      const api = new RestApiClient();
 
-      new RestApiClient()
-        .get<PeopleResponse>('/rest/people', {
-          query: {
-            limit: PICKER_RESULT_LIMIT,
-            ...(filter ? { filter } : {}),
-          },
-        })
-        .then((response) => {
+      const request =
+        pickerKind === 'contact'
+          ? (() => {
+              const filter = buildPeopleSearchFilter(searchQuery);
+
+              return api
+                .get<PeopleResponse>('/rest/people', {
+                  query: {
+                    limit: PICKER_LIMIT,
+                    select: 'id,name,phones,jobTitle',
+                    ...(filter ? { filter } : {}),
+                  },
+                })
+                .then((response) =>
+                  (response?.data?.people ?? []).map((person) => ({
+                    id: person.id,
+                    title: getPersonName(person),
+                    subtitle: getPersonPhones(person)[0] ?? '',
+                  })),
+                );
+            })()
+          : (() => {
+              const filter = buildCompanySearchFilter(searchQuery);
+
+              return api
+                .get<CompaniesResponse>('/rest/companies', {
+                  query: {
+                    limit: PICKER_LIMIT,
+                    select: 'id,name',
+                    ...(filter ? { filter } : {}),
+                  },
+                })
+                .then((response) =>
+                  (response?.data?.companies ?? []).map((company) => ({
+                    id: company.id,
+                    title: String(company.name ?? '').trim() || 'Без названия',
+                    subtitle: '',
+                  })),
+                );
+            })();
+
+      request
+        .then((rows) => {
           if (!isCancelled) {
-            setSearchResults(response?.data?.people ?? []);
+            setSearchResults(rows);
           }
         })
         .catch((error) => {
-          console.error('relation-cards: people search failed', error);
+          console.error('contact-persons: search failed', error);
 
           if (!isCancelled) {
             setSearchResults([]);
@@ -389,220 +460,215 @@ const RelationCards = () => {
       isCancelled = true;
       clearTimeout(timer);
     };
-  }, [isPickerOpen, searchQuery, recordId, searchRefreshKey]);
+  }, [pickerKind, searchQuery, refreshKey]);
 
-  const linkedPersonIds = useMemo(
-    () => new Set(people.map((person) => person.id)),
-    [people],
+  const openPicker = useCallback(
+    (kind: PickerKind) => {
+      pickerOpenedAtRef.current = Date.now();
+      setPickerKind(kind);
+      setSearchQuery('');
+      setSearchResults([]);
+      setIsCreateFormOpen(false);
+    },
+    [],
   );
 
-  const handleToggleLink = useCallback(
-    async (person: PersonRecord) => {
-      if (!recordId || pendingPersonIds.includes(person.id)) {
+  const linkedContactIds = useMemo(
+    () =>
+      new Set(
+        links
+          .map((link) => String(link.kontaktnoeLicoId ?? ''))
+          .filter(Boolean),
+      ),
+    [links],
+  );
+
+  const linkedOwnerIds = useMemo(
+    () =>
+      new Set(
+        usage.map((link) =>
+          String(link.klientCompanyId ?? link.klientPersonId ?? ''),
+        ),
+      ),
+    [usage],
+  );
+
+  const addContactLink = useCallback(
+    async (personId: string) => {
+      if (!recordId) {
         return;
       }
 
-      const isLinked = linkedPersonIds.has(person.id);
+      const body =
+        mode === 'company'
+          ? { klientCompanyId: recordId, kontaktnoeLicoId: personId }
+          : { klientPersonId: recordId, kontaktnoeLicoId: personId };
 
-      setPendingPersonIds((previous) => [...previous, person.id]);
+      await new RestApiClient().post('/rest/kontaktyKlientov', body);
+      await loadAll();
+    },
+    [loadAll, mode, recordId],
+  );
+
+  const handlePick = useCallback(
+    async (id: string) => {
+      if (pendingIds.includes(id)) {
+        return;
+      }
+
+      setPendingIds((previous) => [...previous, id]);
 
       try {
-        await new RestApiClient().patch(`/rest/people/${person.id}`, {
-          companyId: isLinked ? null : recordId,
-        });
+        if (pickerKind === 'owner') {
+          if (!recordId) {
+            return;
+          }
 
-        await loadRelatedPeople();
+          await new RestApiClient().post('/rest/kontaktyKlientov', {
+            klientCompanyId: id,
+            kontaktnoeLicoId: recordId,
+          });
+
+          await loadAll();
+        } else if (linkedContactIds.has(id)) {
+          // уже в списке — второй раз не связываем
+        } else {
+          await addContactLink(id);
+        }
+
+        closePicker();
       } catch (error) {
-        console.error('relation-cards: failed to toggle link', error);
-        setErrorMessage('Не удалось изменить связь');
+        console.error('contact-persons: failed to add link', error);
+
+        await enqueueSnackbar({
+          message: 'Не удалось добавить связь',
+          variant: 'error',
+        });
       } finally {
-        setPendingPersonIds((previous) =>
-          previous.filter((id) => id !== person.id),
+        setPendingIds((previous) =>
+          previous.filter((pendingId) => pendingId !== id),
         );
       }
     },
-    [linkedPersonIds, loadRelatedPeople, pendingPersonIds, recordId],
+    [
+      addContactLink,
+      closePicker,
+      linkedContactIds,
+      pendingIds,
+      pickerKind,
+      recordId,
+      loadAll,
+    ],
   );
 
-  const openCreateForm = useCallback(() => {
-    const preset = splitSearchTermIntoName(searchQuery);
+  const handleRemove = useCallback(
+    async (link: LinkRecord) => {
+      if (pendingIds.includes(link.id)) {
+        return;
+      }
 
-    setFormFirstName(preset.firstName);
-    setFormLastName(preset.lastName);
-    setFormError(null);
-    setIsCreateFormOpen(true);
-  }, [searchQuery]);
+      setPendingIds((previous) => [...previous, link.id]);
 
-  const closeCreateForm = useCallback(() => {
-    setIsCreateFormOpen(false);
-    setFormError(null);
-  }, []);
+      try {
+        await new RestApiClient().delete(`/rest/kontaktyKlientov/${link.id}`);
+        await loadAll();
 
-  const handleOpenPerson = useCallback((personId: string) => {
-    void openSidePanelPage({
-      page: SidePanelPages.ViewRecord,
-      recordId: personId,
-      objectNameSingular: 'person',
-    });
-  }, []);
+        await enqueueSnackbar({
+          message: 'Контактное лицо убрано',
+          variant: 'success',
+        });
+      } catch (error) {
+        console.error('contact-persons: failed to remove link', error);
+
+        await enqueueSnackbar({
+          message: 'Не удалось убрать связь',
+          variant: 'error',
+        });
+      } finally {
+        setPendingIds((previous) =>
+          previous.filter((pendingId) => pendingId !== link.id),
+        );
+      }
+    },
+    [loadAll, pendingIds],
+  );
 
   const handleCreatePerson = useCallback(async () => {
-    if (!recordId || isCreating) {
-      return;
-    }
-
     const firstName = formFirstName.trim();
     const lastName = formLastName.trim();
     const phone = normalizePhone(formPhone);
-    const email = formEmail.trim();
-    const comment = formComment.trim();
 
     if (!firstName && !lastName) {
-      setFormError('Укажите имя или фамилию');
       return;
     }
 
     setIsCreating(true);
-    setFormError(null);
 
     try {
-      await new RestApiClient().post<CreatePersonResponse>('/rest/people', {
-        name: { firstName, lastName },
-        ...(phone ? { phones: { primaryPhoneNumber: phone } } : {}),
-        ...(email ? { emails: { primaryEmail: email } } : {}),
-        ...(comment ? { kommentariy: comment } : {}),
-        companyId: recordId,
-      });
+      const response = await new RestApiClient().post<CreatePersonResponse>(
+        '/rest/people',
+        {
+          name: { firstName, lastName },
+          ...(phone ? { phones: { primaryPhoneNumber: phone } } : {}),
+        },
+      );
+
+      const created = response?.data?.createPerson;
+
+      if (created?.id) {
+        await addContactLink(created.id);
+      } else {
+        await loadAll();
+      }
 
       setFormFirstName('');
       setFormLastName('');
       setFormPhone('');
-      setFormEmail('');
-      setFormComment('');
       setIsCreateFormOpen(false);
-
-      await loadRelatedPeople();
-      setSearchRefreshKey((previous) => previous + 1);
+      closePicker();
 
       await enqueueSnackbar({
         message: 'Контакт создан',
         variant: 'success',
       });
     } catch (error) {
-      console.error('relation-cards: failed to create person', error);
-      setFormError('Не удалось создать контакт (проверьте телефон и email)');
+      console.error('contact-persons: create person failed', error);
+
+      await enqueueSnackbar({
+        message: 'Не удалось создать контакт',
+        variant: 'error',
+      });
     } finally {
       setIsCreating(false);
     }
-  }, [
-    formComment,
-    formEmail,
-    formFirstName,
-    formLastName,
-    formPhone,
-    isCreating,
-    loadRelatedPeople,
-    recordId,
-  ]);
+  }, [addContactLink, closePicker, formFirstName, formLastName, formPhone, loadAll]);
 
-  const sortedPeople = useMemo(() => {
-    const copy = [...people];
-
-    if (sortOrder === 'newest') {
-      return copy.sort((personA, personB) =>
-        String(personB.createdAt ?? '').localeCompare(
-          String(personA.createdAt ?? ''),
-        ),
-      );
-    }
-
-    return copy.sort((personA, personB) =>
-      getPersonName(personA).localeCompare(getPersonName(personB), 'ru'),
-    );
-  }, [people, sortOrder]);
-
-  const isSearchActive = sanitizeSearchTerm(searchQuery).length > 0;
-
-  const pickerRows = useMemo(() => {
-    if (isSearchActive) {
-      return searchResults;
-    }
-
-    const linkedIds = new Set(people.map((person) => person.id));
-
-    return [
-      ...sortedPeople,
-      ...searchResults.filter((person) => !linkedIds.has(person.id)),
-    ];
-  }, [isSearchActive, people, searchResults, sortedPeople]);
-
-  const stateMessageStyle = {
-    fontSize: theme.font.size.sm,
-    color: theme.font.color.tertiary,
-    padding: theme.spacing['3'],
+  const linkRowStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing['2'],
+    padding: `${theme.spacing['1']} 0`,
+    borderBottom: `1px solid ${theme.border.color.light}`,
   };
 
-  const valueStyle = {
-    fontSize: theme.font.size.sm,
-    color: theme.font.color.secondary,
-    overflowWrap: 'anywhere' as const,
+  const mutedStyle = {
+    fontSize: theme.font.size.xs,
+    color: theme.font.color.light,
+  };
+
+  const headerStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing['2'],
+    paddingBottom: theme.spacing['1'],
   };
 
   const titleStyle = {
-    fontSize: theme.font.size.md,
+    fontSize: theme.font.size.sm,
     fontWeight: theme.font.weight.medium,
     color: theme.font.color.primary,
-  };
-
-  const renderCardField = (person: PersonRecord, field: string) => {
-    switch (field) {
-      case 'name':
-        return <span style={titleStyle}>{getPersonName(person)}</span>;
-
-      case 'phones':
-        return getPersonPhones(person).map((phone, index) => (
-          <span key={`phone-${index}`} style={valueStyle}>
-            {phone}
-          </span>
-        ));
-
-      case 'emails':
-        return getPersonEmails(person).map((email, index) => (
-          <span key={`email-${index}`} style={valueStyle}>
-            {email}
-          </span>
-        ));
-
-      case 'kommentariy':
-        return person.kommentariy ? (
-          <span style={{ ...valueStyle, whiteSpace: 'pre-wrap' }}>
-            {person.kommentariy}
-          </span>
-        ) : null;
-
-      case 'jobTitle':
-        return person.jobTitle ? (
-          <span style={valueStyle}>{person.jobTitle}</span>
-        ) : null;
-
-      case 'adresYuridicheskiy':
-        return getAddressLines(person.adresYuridicheskiy).map((line, index) => (
-          <span key={`address-${index}`} style={valueStyle}>
-            {line}
-          </span>
-        ));
-
-      case 'tipOtnosheniy': {
-        const values = getMultiselectValues(person.tipOtnosheniy);
-
-        return values.length > 0 ? (
-          <span style={valueStyle}>{values.join(', ')}</span>
-        ) : null;
-      }
-
-      default:
-        return null;
-    }
   };
 
   const inputStyle = {
@@ -618,354 +684,334 @@ const RelationCards = () => {
     outline: 'none',
   };
 
-  const createRowStyle = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: theme.spacing['2'],
-    padding: `${theme.spacing['2']} ${theme.spacing['3']}`,
-    cursor: 'pointer',
-    color: theme.font.color.primary,
-    fontSize: theme.font.size.sm,
-    borderTop: `1px solid ${theme.border.color.light}`,
-  };
+  const renderPicker = () => {
+    if (!pickerKind) {
+      return null;
+    }
 
-  const renderCheckbox = (isChecked: boolean, isPending: boolean) => (
-    <div
-      style={{
-        width: `${CHECKBOX_SIZE_IN_PX}px`,
-        height: `${CHECKBOX_SIZE_IN_PX}px`,
-        minWidth: `${CHECKBOX_SIZE_IN_PX}px`,
-        borderRadius: '4px',
-        border: `1px solid ${
-          isChecked ? theme.color.blue : theme.border.color.medium
-        }`,
-        background: isChecked ? theme.color.blue : 'transparent',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        opacity: isPending ? 0.5 : 1,
-        flexShrink: 0,
-      }}
-    >
-      {isChecked ? <IconCheck size={12} color="#FFFFFF" /> : null}
-    </div>
-  );
+    const createTerm = searchQuery.trim();
+    const preset = splitSearchTermIntoName(createTerm);
+    const canCreate =
+      pickerKind === 'contact' &&
+      createTerm.length > 1 &&
+      !searchResults.some(
+        (row) => row.title.toLowerCase() === createTerm.toLowerCase(),
+      );
 
-  const createLabel = sanitizeSearchTerm(searchQuery)
-    ? `Создать «${sanitizeSearchTerm(searchQuery)}»`
-    : 'Создать нового контакта';
-
-  const renderCreateForm = () => (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: theme.spacing['2'],
-        padding: theme.spacing['3'],
-      }}
-    >
-      <div style={{ fontSize: theme.font.size.sm, color: theme.font.color.secondary }}>
-        Новый контакт
-      </div>
-
-      <input
-        style={inputStyle}
-        value={formFirstName}
-        placeholder="Имя"
-        onChange={(event) => setFormFirstName(event.target.value)}
-      />
-
-      <input
-        style={inputStyle}
-        value={formLastName}
-        placeholder="Фамилия"
-        onChange={(event) => setFormLastName(event.target.value)}
-      />
-
-      <input
-        style={inputStyle}
-        value={formPhone}
-        placeholder="Телефон"
-        onChange={(event) => setFormPhone(event.target.value)}
-      />
-
-      <input
-        style={inputStyle}
-        value={formEmail}
-        placeholder="Email"
-        onChange={(event) => setFormEmail(event.target.value)}
-      />
-
-      <textarea
-        style={{ ...inputStyle, minHeight: '56px', resize: 'vertical' }}
-        value={formComment}
-        placeholder="Комментарий"
-        onChange={(event) => setFormComment(event.target.value)}
-      />
-
-      {formError ? (
-        <div style={{ fontSize: theme.font.size.sm, color: theme.color.red }}>
-          {formError}
-        </div>
-      ) : null}
-
-      <div style={{ display: 'flex', gap: theme.spacing['2'] }}>
-        <Button
-          title={isCreating ? 'Создание…' : 'Создать'}
-          size="small"
-          variant="primary"
-          disabled={isCreating}
-          onClick={() => {
-            void handleCreatePerson();
+    return (
+      <>
+        <div
+          onClick={closePicker}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: 9,
+            background: 'transparent',
           }}
         />
 
-        <Button
-          title="Отмена"
-          size="small"
-          variant="secondary"
-          disabled={isCreating}
-          onClick={closeCreateForm}
-        />
-      </div>
+        <div
+          onClick={(event) => event.stopPropagation()}
+          onMouseDown={markInsideInteraction}
+          style={{
+            position: 'absolute',
+            top: '100%',
+            right: 0,
+            width: '320px',
+            zIndex: 10,
+            display: 'flex',
+            flexDirection: 'column',
+            background: theme.background.primary,
+            border: `1px solid ${theme.border.color.medium}`,
+            borderRadius: theme.border.radius.md,
+            boxShadow: theme.boxShadow.strong,
+            padding: theme.spacing['2'],
+            gap: theme.spacing['1'],
+          }}
+        >
+          <SearchInput
+            value={searchQuery}
+            onChange={setSearchQuery}
+            placeholder={
+              pickerKind === 'contact' ? 'Имя или телефон' : 'Название компании'
+            }
+            autoFocus
+          />
+
+          <div style={{ maxHeight: '260px', overflowY: 'auto' }}>
+            {isSearching && searchResults.length === 0 ? (
+              <div style={{ ...mutedStyle, padding: theme.spacing['1'] }}>
+                Поиск…
+              </div>
+            ) : null}
+
+            {searchResults.map((row) => {
+              const isLinked =
+                pickerKind === 'contact'
+                  ? linkedContactIds.has(row.id)
+                  : linkedOwnerIds.has(row.id);
+
+              return (
+                <button
+                  key={row.id}
+                  type="button"
+                  disabled={isLinked}
+                  onClick={() => {
+                    if (!isLinked) {
+                      void handlePick(row.id);
+                    }
+                  }}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'flex-start',
+                    width: '100%',
+                    padding: `${theme.spacing['1']} ${theme.spacing['2']}`,
+                    border: 'none',
+                    borderRadius: theme.border.radius.sm,
+                    background: 'transparent',
+                    cursor: isLinked ? 'default' : 'pointer',
+                    opacity: isLinked ? 0.5 : 1,
+                    textAlign: 'left' as const,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: theme.font.size.sm,
+                      color: theme.font.color.primary,
+                    }}
+                  >
+                    {row.title}
+                  </span>
+
+                  {row.subtitle ? (
+                    <span style={mutedStyle}>{row.subtitle}</span>
+                  ) : null}
+                </button>
+              );
+            })}
+
+            {!isSearching && searchResults.length === 0 && !isCreateFormOpen ? (
+              <div style={{ ...mutedStyle, padding: theme.spacing['1'] }}>
+                Ничего не найдено
+              </div>
+            ) : null}
+          </div>
+
+          {canCreate && !isCreateFormOpen ? (
+            <Button
+              title={`+ Создать «${createTerm}»`}
+              size="small"
+              variant="secondary"
+              onClick={() => {
+                setFormFirstName(preset.firstName);
+                setFormLastName(preset.lastName);
+                setFormPhone(/^[\d+\-\s()]+$/.test(createTerm) ? createTerm : '');
+                setIsCreateFormOpen(true);
+              }}
+            />
+          ) : null}
+
+          {isCreateFormOpen ? (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: theme.spacing['1'],
+              }}
+            >
+              <input
+                style={inputStyle}
+                value={formLastName}
+                placeholder="Фамилия"
+                onChange={(event) => setFormLastName(event.target.value)}
+              />
+              <input
+                style={inputStyle}
+                value={formFirstName}
+                placeholder="Имя"
+                onChange={(event) => setFormFirstName(event.target.value)}
+              />
+              <input
+                style={inputStyle}
+                value={formPhone}
+                placeholder="Телефон"
+                onChange={(event) => setFormPhone(event.target.value)}
+              />
+
+              <div style={{ display: 'flex', gap: theme.spacing['2'] }}>
+                <Button
+                  title={isCreating ? 'Создание…' : 'Создать'}
+                  size="small"
+                  variant="primary"
+                  disabled={isCreating}
+                  onClick={() => {
+                    void handleCreatePerson();
+                  }}
+                />
+
+                <Button
+                  title="Отмена"
+                  size="small"
+                  variant="secondary"
+                  disabled={isCreating}
+                  onClick={() => setIsCreateFormOpen(false)}
+                />
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </>
+    );
+  };
+
+  const renderBlockHeader = (title: string, kind: PickerKind) => (
+    <div style={headerStyle}>
+      <span style={titleStyle}>{title}</span>
+
+      <Button
+        title="Добавить"
+        size="small"
+        variant="secondary"
+        disabled={!recordId}
+        onClick={(event) => {
+          event.stopPropagation();
+
+          if (pickerKind === kind) {
+            closePicker();
+          } else {
+            openPicker(kind);
+          }
+        }}
+      />
     </div>
   );
+
+  const renderLinkRow = (link: LinkRecord, showOwner: boolean) => {
+    const person = persons[String(link.kontaktnoeLicoId ?? '')];
+    const personName = person ? getPersonName(person) : String(link.name ?? '').trim() || 'Без имени';
+    const phones = getPersonPhones(person);
+    const ownerId = String(link.klientCompanyId ?? link.klientPersonId ?? '');
+    const ownerName = showOwner ? ownerNames[ownerId] ?? '' : '';
+
+    return (
+      <div key={link.id} style={linkRowStyle}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '2px',
+            minWidth: 0,
+          }}
+        >
+          <span
+            style={{
+              fontSize: theme.font.size.sm,
+              color: theme.font.color.primary,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap' as const,
+            }}
+          >
+            {personName}
+          </span>
+
+          {ownerName ? (
+            <span style={mutedStyle}>{ownerName}</span>
+          ) : null}
+
+          {phones.length > 0 ? (
+            <span style={mutedStyle}>{phones.join(', ')}</span>
+          ) : null}
+        </div>
+
+        <IconButton
+          Icon={IconTrash}
+          size="small"
+          variant="secondary"
+          accent="default"
+          ariaLabel="Убрать"
+          disabled={pendingIds.includes(link.id)}
+          onClick={(event) => {
+            event.stopPropagation();
+            void handleRemove(link);
+          }}
+        />
+      </div>
+    );
+  };
+
+  if (!recordId) {
+    return null;
+  }
 
   return (
     <div
       style={{
+        position: 'relative',
         display: 'flex',
         flexDirection: 'column',
         width: '100%',
+        gap: theme.spacing['3'],
       }}
     >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'flex-end',
-          position: 'relative',
-          padding: `${theme.spacing['1']} 0`,
-        }}
-      >
-        <IconButton
-          Icon={IconPencil}
-          size="medium"
-          variant="secondary"
-          accent="default"
-          ariaLabel="Связать"
-          disabled={!recordId}
-          onClick={(event) => {
-            event.stopPropagation();
+      {errorMessage ? (
+        <div style={{ fontSize: theme.font.size.sm, color: theme.color.red }}>
+          {errorMessage}
+        </div>
+      ) : null}
 
-            const nextIsPickerOpen = !isPickerOpen;
+      {isLoading && links.length === 0 && usage.length === 0 ? (
+        <div style={mutedStyle}>Загрузка…</div>
+      ) : null}
 
-            if (nextIsPickerOpen) {
-              pickerOpenedAtRef.current = Date.now();
-            }
-
-            setIsPickerOpen(nextIsPickerOpen);
+      {mode !== 'unknown' ? (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            position: 'relative',
           }}
-        />
+        >
+          {renderBlockHeader('Контактные лица', 'contact')}
 
-        {isPickerOpen ? (
-          <div
-            onClick={closePicker}
-            style={{
-              position: 'fixed',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              zIndex: 9,
-              background: 'transparent',
-            }}
-          />
-        ) : null}
-
-        {isPickerOpen ? (
-          <div
-            onClick={(event) => event.stopPropagation()}
-            onMouseDown={markInsideInteraction}
-            style={{
-              position: 'absolute',
-              top: '100%',
-              right: 0,
-              width: '320px',
-              zIndex: 10,
-              display: 'flex',
-              flexDirection: 'column',
-              background: theme.background.primary,
-              border: `1px solid ${theme.border.color.medium}`,
-              borderRadius: theme.border.radius.md,
-              boxShadow: theme.boxShadow.strong,
-              overflow: 'hidden',
-            }}
-          >
-            {isCreateFormOpen ? (
-              renderCreateForm()
-            ) : (
-              <>
-                <div
-                  onBlur={handleSearchBlur}
-                  style={{ padding: theme.spacing['2'] }}
-                >
-                  <SearchInput
-                    value={searchQuery}
-                    onChange={setSearchQuery}
-                    placeholder="Имя, телефон, email"
-                    autoFocus
-                  />
-                </div>
-
-                <div style={{ maxHeight: '280px', overflowY: 'auto' }}>
-                  {isSearching && pickerRows.length === 0 ? (
-                    <div style={stateMessageStyle}>Поиск…</div>
-                  ) : null}
-
-                  {!isSearching && pickerRows.length === 0 ? (
-                    <div style={stateMessageStyle}>Ничего не найдено</div>
-                  ) : null}
-
-                  {pickerRows.map((person) => {
-                    const isLinked = linkedPersonIds.has(person.id);
-                    const isPending = pendingPersonIds.includes(person.id);
-                    const personName = getPersonName(person);
-                    const phones = getPersonPhones(person);
-                    const emails = getPersonEmails(person);
-                    const hint = [phones[0], emails[0]]
-                      .filter(Boolean)
-                      .join(' • ');
-
-                    return (
-                      <div
-                        key={person.id}
-                        onClick={() => {
-                          void handleToggleLink(person);
-                        }}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: theme.spacing['2'],
-                          padding: `${theme.spacing['2']} ${theme.spacing['3']}`,
-                          borderBottom: `1px solid ${theme.border.color.light}`,
-                          cursor: isPending ? 'default' : 'pointer',
-                        }}
-                      >
-                        {renderCheckbox(isLinked, isPending)}
-
-                        <div
-                          style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            minWidth: 0,
-                            flex: 1,
-                          }}
-                        >
-                          <span
-                            style={{
-                              fontSize: theme.font.size.sm,
-                              color: theme.font.color.primary,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            {personName}
-                          </span>
-
-                          {hint ? (
-                            <span
-                              style={{
-                                fontSize: theme.font.size.xs,
-                                color: theme.font.color.tertiary,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {hint}
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                <div onClick={openCreateForm} style={createRowStyle}>
-                  <IconPlus size={16} />
-                  <span>{createLabel}</span>
-                </div>
-              </>
-            )}
-          </div>
-        ) : null}
-      </div>
-
-      {isLoading ? <div style={stateMessageStyle}>Загрузка…</div> : null}
-
-      {!isLoading && errorMessage ? (
-        <div style={stateMessageStyle}>{errorMessage}</div>
-      ) : null}
-
-      {!isLoading && !errorMessage && sortedPeople.length === 0 ? (
-        <div style={stateMessageStyle}>Нет связанных контактов</div>
-      ) : null}
-
-      {!isLoading && !errorMessage && sortedPeople.length > 0
-        ? sortedPeople.map((person) => (
-            <div
-              key={person.id}
-              onClick={() => {
-                closePicker();
-                handleOpenPerson(person.id);
-              }}
-              onMouseEnter={() => setHoveredPersonId(person.id)}
-              onMouseLeave={() =>
-                setHoveredPersonId((previous) =>
-                  previous === person.id ? null : previous,
-                )
-              }
-              style={{
-                display: 'flex',
-                gap: theme.spacing['3'],
-                padding: `${theme.spacing['2']} ${theme.spacing['1']}`,
-                borderBottom: `1px solid ${theme.border.color.light}`,
-                cursor: 'pointer',
-                borderRadius: theme.border.radius.sm,
-                background:
-                  hoveredPersonId === person.id
-                    ? theme.background.transparent.light
-                    : 'transparent',
-              }}
-            >
-              {showAvatar ? (
-                <Avatar
-                  size="md"
-                  placeholder={getPersonName(person)}
-                  placeholderColorSeed={person.id}
-                  avatarUrl={person.avatarUrl ?? undefined}
-                />
-              ) : null}
-
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: theme.spacing['1'],
-                  minWidth: 0,
-                  flex: 1,
-                }}
-              >
-                {cardFields.map((field) => (
-                  <Fragment key={field}>
-                    {renderCardField(person, field)}
-                  </Fragment>
-                ))}
-              </div>
+          {links.length === 0 && !isLoading ? (
+            <div style={{ ...mutedStyle, padding: `${theme.spacing['1']} 0` }}>
+              Пока никого нет
             </div>
-          ))
-        : null}
+          ) : null}
+
+          {links.map((link) => renderLinkRow(link, false))}
+
+          {pickerKind === 'contact' ? renderPicker() : null}
+        </div>
+      ) : null}
+
+      {mode === 'person' ? (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            position: 'relative',
+          }}
+        >
+          {renderBlockHeader('Используется как контактное лицо', 'owner')}
+
+          {usage.length === 0 && !isLoading ? (
+            <div style={{ ...mutedStyle, padding: `${theme.spacing['1']} 0` }}>
+              Ни у кого не указан
+            </div>
+          ) : null}
+
+          {usage.map((link) => renderLinkRow(link, true))}
+
+          {pickerKind === 'owner' ? renderPicker() : null}
+        </div>
+      ) : null}
+
     </div>
   );
 };
@@ -973,6 +1019,7 @@ const RelationCards = () => {
 export default defineFrontComponent({
   universalIdentifier: RELATION_CARDS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER,
   name: 'Контактные лица',
-  description: 'Связанные записи в виде карточек с выбранными полями',
-  component: RelationCards,
+  description:
+    'Контактные лица контрагента: список, добавление и удаление связей',
+  component: ContactPersons,
 });
