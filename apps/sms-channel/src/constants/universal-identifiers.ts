@@ -11,3 +11,11 @@ export const INBOUND_ROUTE_PATH = '/sms-inbound';
 /** Логик-функция приёма входящих SMS. */
 export const SMS_INBOUND_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
   'a4272584-eca6-44c1-9291-458dc480cec3';
+/** Постановка исходящего сообщения в очередь отправки (событие создания сообщения). */
+export const SMS_OUTBOX_QUEUE_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'bea95bca-aa3e-4af2-b1f7-9a0d8a38b9a9';
+
+/** Крон-движок отправки SMS и статусов доставки. */
+export const SMS_OUTBOX_SEND_FUNCTION_UNIVERSAL_IDENTIFIER =
+  '2e556c99-6c4c-4865-b4ca-53c8fe004dde';
+

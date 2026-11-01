@@ -34,6 +34,19 @@
   "connectionProviders": [],
   "logicFunctions": [
     {
+      "universalIdentifier": "2e556c99-6c4c-4865-b4ca-53c8fe004dde",
+      "name": "sms-outbox-send",
+      "description": "Отправка очереди SMS и обновление статусов доставки",
+      "timeoutSeconds": 60,
+      "cronTriggerSettings": {
+        "pattern": "* * * * *"
+      },
+      "handlerName": "default.config.handler",
+      "sourceHandlerPath": "src/logic-functions/sms-outbox-send.logic-function.ts",
+      "builtHandlerPath": "src/logic-functions/sms-outbox-send.logic-function.mjs",
+      "builtHandlerChecksum": "85d23f95a9c284508a92687df697a7e6"
+    },
+    {
       "universalIdentifier": "a4272584-eca6-44c1-9291-458dc480cec3",
       "name": "sms-inbound",
       "description": "Входящие SMS с Android-шлюза → диалог «Центра коммуникации»",
@@ -50,6 +63,19 @@
       "sourceHandlerPath": "src/logic-functions/sms-inbound.logic-function.ts",
       "builtHandlerPath": "src/logic-functions/sms-inbound.logic-function.mjs",
       "builtHandlerChecksum": "ba8f7a884a0658f8bdcb3312a8975b5a"
+    },
+    {
+      "universalIdentifier": "bea95bca-aa3e-4af2-b1f7-9a0d8a38b9a9",
+      "name": "sms-outbox-queue",
+      "description": "Исходящее сообщение SMS-диалога → задача отправки",
+      "timeoutSeconds": 30,
+      "databaseEventTriggerSettings": {
+        "eventName": "soobshchenie.created"
+      },
+      "handlerName": "default.config.handler",
+      "sourceHandlerPath": "src/logic-functions/sms-outbox-queue.logic-function.ts",
+      "builtHandlerPath": "src/logic-functions/sms-outbox-queue.logic-function.mjs",
+      "builtHandlerChecksum": "230316850551f62626f9c11d781da80c"
     }
   ],
   "frontComponents": [],
