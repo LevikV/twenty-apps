@@ -156,7 +156,8 @@ export const connectChannel = async (
 
   const patch = {
     sotrudnikId: memberId,
-    nomer,
+    // Поле типа «Телефон» принимает объект, не строку.
+    nomer: { primaryPhoneNumber: nomer, primaryPhoneCallingCode: '+7' },
     login: cleanLogin,
     parol: cleanParol,
     deviceId: check.deviceId,
