@@ -60,4 +60,9 @@ export const CHAT_CLIENT_THREAD_FUNCTION_UNIVERSAL_IDENTIFIER =
 export const CHAT_CLIENT_SEND_FUNCTION_UNIVERSAL_IDENTIFIER =
   '04db391c-c9bb-4a23-900e-ec0d8d9dc8d5';
 
+/** Сделки в переписке — фильтр ленты по сделке. */
+export const CHAT_THREAD_DEALS_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'b567d017-f5d2-4437-9acc-f2f9a7ac1020';
+
+
 

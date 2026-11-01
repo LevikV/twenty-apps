@@ -45,6 +45,8 @@ export type MessageView = {
   /** Направление и статус доставки — есть только у сообщений каналов связи. */
   napravlenie: string | null;
   statusDostavki: string | null;
+  /** Сделка, к которой отнесено сообщение (связка чата). */
+  svyazkaId: string | null;
 };
 
 /**
@@ -317,7 +319,7 @@ export class ChatService {
     const response = await this.client.get<unknown>('/rest/soobshcheniya', {
       query: {
         filter: `chatId[eq]:"${chatId}"`,
-        select: 'id,tekst,createdAt,avtorId,chatId,napravlenie,statusDostavki',
+        select: 'id,tekst,createdAt,avtorId,chatId,napravlenie,statusDostavki,svyazkaId',
         limit: 60,
       },
     });
@@ -340,6 +342,7 @@ export class ChatService {
           mentions: mentionMap.get(id) ?? [],
           napravlenie: asString(message.napravlenie),
           statusDostavki: asString(message.statusDostavki),
+          svyazkaId: asString(message.svyazkaId),
         };
       })
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));

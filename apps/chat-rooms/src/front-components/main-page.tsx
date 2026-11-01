@@ -46,6 +46,7 @@ type Message = {
   mentions?: MentionView[];
   napravlenie?: string | null;
   statusDostavki?: string | null;
+  svyazkaId?: string | null;
 };
 
 const formatChannelPhone = (value: string | null): string => {
@@ -231,6 +232,12 @@ const ChatCenter = () => {
   const [showAllChats, setShowAllChats] = useState(false);
   // Две ленты: внутренние чаты сотрудников и переписка с клиентами по каналам.
   const [section, setSection] = useState<'vnutrennie' | 'klienty'>('vnutrennie');
+
+  // Фильтры клиентской ленты: поиск по клиенту, канал и сделка.
+  const [dialogSearch, setDialogSearch] = useState('');
+  const [channelFilter, setChannelFilter] = useState<string>('all');
+  const [dealFilter, setDealFilter] = useState<string>('all');
+  const [threadDeals, setThreadDeals] = useState<{ id: string; name: string; count: number }[]>([]);
   // Экраны центра: сами диалоги или подключение своих каналов.
   const [view, setView] = useState<'chats' | 'channels'>('chats');
   // Создание личного диалога: выбираем сотрудника из списка.
@@ -707,6 +714,35 @@ const ChatCenter = () => {
 
   const activeChat = dialogs.find((dialog) => dialog.id === activeChatId) ?? null;
 
+  // Сделки этой переписки — для фильтра ленты. У внутренних диалогов их нет.
+  useEffect(() => {
+    if (!activeChatId || activeChat?.tip !== 'KLIENT') {
+      setThreadDeals([]);
+      setDealFilter('all');
+
+      return;
+    }
+
+    let alive = true;
+
+    void callRoute<{ deals: { id: string; name: string; count: number }[] }>(
+      `/chat-thread-deals?chatId=${encodeURIComponent(activeChatId)}`,
+    )
+      .then((result) => {
+        if (alive) setThreadDeals(result.deals ?? []);
+      })
+      .catch(() => {
+        if (alive) setThreadDeals([]);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [activeChatId, activeChat?.tip]);
+
+  const visibleMessages =
+    dealFilter === 'all' ? messages : messages.filter((message) => message.svyazkaId === dealFilter);
+
   // Открыли чат сделки по ссылке из уведомления — показываем полный список,
   // иначе выбранного диалога не видно в колонке.
   useEffect(() => {
@@ -726,9 +762,18 @@ const ChatCenter = () => {
     ? 0
     : dialogs.filter((dialog) => dialog.tip !== 'KLIENT' && dialog.tip !== 'LICHNY').length;
 
+  const clientDialogs = dialogs.filter((dialog) => dialog.tip === 'KLIENT');
+  const clientChannels = [...new Set(clientDialogs.map((dialog) => dialog.kanal).filter(Boolean))] as string[];
+  const searchValue = dialogSearch.trim().toLowerCase();
+
   const visibleDialogs =
     section === 'klienty'
-      ? dialogs.filter((dialog) => dialog.tip === 'KLIENT')
+      ? clientDialogs.filter((dialog) => {
+          const byChannel = channelFilter === 'all' || dialog.kanal === channelFilter;
+          const bySearch = searchValue.length === 0 || (dialog.name ?? '').toLowerCase().includes(searchValue);
+
+          return byChannel && bySearch;
+        })
       : showAllChats
         ? dialogs.filter((dialog) => dialog.tip !== 'KLIENT')
         : dialogs.filter((dialog) => dialog.tip === 'LICHNY');
@@ -826,6 +871,52 @@ const ChatCenter = () => {
             })}
           </div>
         </div>
+
+        {section === 'klienty' && (
+          <div style={{ padding: '0 12px 8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <input
+              value={dialogSearch}
+              onChange={(event) => setDialogSearch(event.target.value)}
+              placeholder="Поиск клиента или номера"
+              style={{
+                width: '100%',
+                boxSizing: 'border-box',
+                border: '1px solid #dcdcdc',
+                borderRadius: '6px',
+                padding: '6px 9px',
+                fontSize: '12px',
+                background: '#fff',
+              }}
+            />
+
+            {clientChannels.length > 1 && (
+              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                {['all', ...clientChannels].map((channel) => {
+                  const active = channelFilter === channel;
+
+                  return (
+                    <button
+                      key={channel}
+                      type="button"
+                      onClick={() => setChannelFilter(channel)}
+                      style={{
+                        border: '1px solid ' + (active ? '#1961ff' : '#e0e0e0'),
+                        background: active ? '#eef3ff' : '#fff',
+                        color: active ? '#1961ff' : '#666',
+                        borderRadius: '12px',
+                        padding: '2px 9px',
+                        fontSize: '11px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {channel === 'all' ? 'Все каналы' : channel}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {section === 'vnutrennie' && (
           <div
@@ -1123,6 +1214,29 @@ const ChatCenter = () => {
                   </div>
                 )}
               </div>
+
+              {threadDeals.length > 0 && (
+                <select
+                  value={dealFilter}
+                  onChange={(event) => setDealFilter(event.target.value)}
+                  style={{
+                    marginLeft: 'auto',
+                    border: '1px solid #dcdcdc',
+                    borderRadius: '6px',
+                    padding: '4px 8px',
+                    fontSize: '12px',
+                    background: '#fff',
+                    maxWidth: '260px',
+                  }}
+                >
+                  <option value="all">Все сделки ({messages.length})</option>
+                  {threadDeals.map((deal) => (
+                    <option key={deal.id} value={deal.id}>
+                      {deal.name} ({deal.count})
+                    </option>
+                  ))}
+                </select>
+              )}
               <span
                 style={{
                   fontSize: '11px',
@@ -1137,13 +1251,13 @@ const ChatCenter = () => {
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', minHeight: 0 }}>
-              {messages.length === 0 && (
+              {visibleMessages.length === 0 && (
                 <div style={{ fontSize: '13px', color: '#999' }}>
                   Сообщений пока нет — напишите первым
                 </div>
               )}
 
-              {messages.map((message) => {
+              {visibleMessages.map((message) => {
                 const isMine = message.authorId === myMemberId;
 
                 return (
