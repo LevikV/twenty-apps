@@ -18,4 +18,16 @@ export const SMS_OUTBOX_QUEUE_FUNCTION_UNIVERSAL_IDENTIFIER =
 /** Крон-движок отправки SMS и статусов доставки. */
 export const SMS_OUTBOX_SEND_FUNCTION_UNIVERSAL_IDENTIFIER =
   '2e556c99-6c4c-4865-b4ca-53c8fe004dde';
+/** Мои каналы: список подключённых телефонов сотрудника. */
+export const SMS_CHANNELS_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'b42085c7-0923-4dcb-85af-e1c8d7c93fae';
+
+/** Подключение телефона сотрудником. */
+export const SMS_CHANNEL_CONNECT_FUNCTION_UNIVERSAL_IDENTIFIER =
+  '7ffc6061-a066-405d-b3a6-1e4f47f2bab7';
+
+/** Данные для инструкции подключения. */
+export const SMS_CHANNEL_INFO_FUNCTION_UNIVERSAL_IDENTIFIER =
+  '963a7fc1-1f45-4890-9bed-27e6d3a35477';
+
 

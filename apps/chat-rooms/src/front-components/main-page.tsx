@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { callRoute, functionsBase as envFunctionsBase } from './chat-api';
 import { connectChatSocket, type ChatSocketHandle } from './chat-socket';
+import { ChannelsPanel } from './channels-panel';
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { SidePanelPages, openSidePanelPage } from 'twenty-sdk/front-component';
 
@@ -21,6 +22,8 @@ type Dialog = {
   id: string;
   name: string;
   tip: string | null;
+  /** Канал: SMS, TG, MAX или внутренний. */
+  kanal: string | null;
   lastMessage: string | null;
   lastAt: string | null;
   unread: number;
@@ -206,6 +209,10 @@ const ChatCenter = () => {
   const [initialChatId] = useState<string | null>(() => readChatIdFromUrl());
   // «Мои диалоги» — только личные; чаты сделок и задач прячем за включателем.
   const [showAllChats, setShowAllChats] = useState(false);
+  // Две ленты: внутренние чаты сотрудников и переписка с клиентами по каналам.
+  const [section, setSection] = useState<'vnutrennie' | 'klienty'>('vnutrennie');
+  // Экраны центра: сами диалоги или подключение своих каналов.
+  const [view, setView] = useState<'chats' | 'channels'>('chats');
   // Создание личного диалога: выбираем сотрудника из списка.
   const [pickerOpen, setPickerOpen] = useState(false);
   const [members, setMembers] = useState<MemberOption[]>([]);
@@ -683,19 +690,50 @@ const ChatCenter = () => {
   // Открыли чат сделки по ссылке из уведомления — показываем полный список,
   // иначе выбранного диалога не видно в колонке.
   useEffect(() => {
-    if (activeChat && activeChat.tip !== 'LICHNY') {
+    if (!activeChat) return;
+
+    if (activeChat.tip === 'KLIENT') {
+      setSection('klienty');
+      return;
+    }
+
+    if (activeChat.tip !== 'LICHNY') {
       setShowAllChats(true);
     }
   }, [activeChat]);
 
-  const visibleDialogs = showAllChats
-    ? dialogs
-    : dialogs.filter((dialog) => dialog.tip === 'LICHNY');
+  const hiddenCount = showAllChats
+    ? 0
+    : dialogs.filter((dialog) => dialog.tip !== 'KLIENT' && dialog.tip !== 'LICHNY').length;
 
-  const hiddenCount = dialogs.length - visibleDialogs.length;
+  const visibleDialogs =
+    section === 'klienty'
+      ? dialogs.filter((dialog) => dialog.tip === 'KLIENT')
+      : showAllChats
+        ? dialogs.filter((dialog) => dialog.tip !== 'KLIENT')
+        : dialogs.filter((dialog) => dialog.tip === 'LICHNY');
 
   if (isLoading) {
     return <div style={{ padding: '24px', color: '#888' }}>Загружаю диалоги…</div>;
+  }
+
+  if (view === 'channels') {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          height: 'calc(100vh - 96px)',
+          minHeight: 0,
+          overflow: 'hidden',
+          boxSizing: 'border-box',
+          background: '#fafafa',
+          fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          color: '#333',
+        }}
+      >
+        <ChannelsPanel onClose={() => setView('chats')} />
+      </div>
+    );
   }
 
   return (
@@ -723,32 +761,80 @@ const ChatCenter = () => {
           background: '#fafafa',
         }}
       >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '16px 16px 6px',
-          }}
-        >
-          <span style={{ fontWeight: 600, fontSize: '14px' }}>Мои диалоги</span>
-          <button
-            type="button"
-            onClick={() => void openPicker()}
+        <div style={{ padding: '14px 12px 8px' }}>
+          <div
             style={{
-              border: '1px solid #d6d6d6',
-              background: '#ffffff',
-              borderRadius: '6px',
-              padding: '4px 8px',
-              fontSize: '12px',
-              color: '#333',
-              cursor: 'pointer',
+              display: 'flex',
+              background: '#ececec',
+              borderRadius: '8px',
+              padding: '2px',
+              gap: '2px',
             }}
           >
-            Новый чат
-          </button>
+            {(
+              [
+                { key: 'vnutrennie', label: 'Внутренние' },
+                { key: 'klienty', label: 'Клиенты' },
+              ] as const
+            ).map((tab) => {
+              const active = section === tab.key;
+
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => {
+                    setSection(tab.key);
+                    setShowAllChats(false);
+                  }}
+                  style={{
+                    flex: 1,
+                    border: 'none',
+                    borderRadius: '6px',
+                    padding: '6px 8px',
+                    background: active ? '#ffffff' : 'transparent',
+                    boxShadow: active ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+                    fontWeight: active ? 600 : 500,
+                    fontSize: '13px',
+                    color: active ? '#222' : '#666',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
+        {section === 'vnutrennie' && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              padding: '0 12px 8px',
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => void openPicker()}
+              style={{
+                border: '1px solid #d6d6d6',
+                background: '#ffffff',
+                borderRadius: '6px',
+                padding: '4px 8px',
+                fontSize: '12px',
+                color: '#333',
+                cursor: 'pointer',
+              }}
+            >
+              Новый чат
+            </button>
+          </div>
+        )}
+
+        {section === 'vnutrennie' && (
         <label
           style={{
             display: 'flex',
@@ -772,6 +858,7 @@ const ChatCenter = () => {
             {hiddenCount > 0 && !showAllChats ? ` (скрыто ${hiddenCount})` : ''}
           </span>
         </label>
+        )}
 
         {error && (
           <div
@@ -896,6 +983,23 @@ const ChatCenter = () => {
                       whiteSpace: 'nowrap',
                     }}
                   >
+                    {dialog.kanal && dialog.kanal !== 'VNUTRENNIY' && (
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          marginRight: '6px',
+                          padding: '0 5px',
+                          borderRadius: '4px',
+                          background: '#e8f0ff',
+                          color: '#1961ff',
+                          fontSize: '10px',
+                          fontWeight: 600,
+                          verticalAlign: 'middle',
+                        }}
+                      >
+                        {dialog.kanal}
+                      </span>
+                    )}
                     {dialog.name || 'Без названия'}
                   </span>
                   <span style={{ fontSize: '11px', color: '#aaa' }}>
@@ -939,6 +1043,25 @@ const ChatCenter = () => {
               </div>
             );
           })}
+        </div>
+
+        <div style={{ borderTop: '1px solid #e8e8e8', padding: '8px 12px' }}>
+          <button
+            type="button"
+            onClick={() => setView('channels')}
+            style={{
+              width: '100%',
+              border: '1px solid #d6d6d6',
+              background: '#ffffff',
+              borderRadius: '6px',
+              padding: '6px 8px',
+              fontSize: '12px',
+              color: '#333',
+              cursor: 'pointer',
+            }}
+          >
+            Мои каналы
+          </button>
         </div>
       </div>
 

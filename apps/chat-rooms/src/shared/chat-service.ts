@@ -20,6 +20,8 @@ export type DialogView = {
   id: string;
   name: string;
   tip: string | null;
+  /** Канал связи: SMS, TG, MAX или внутренний чат. */
+  kanal: string | null;
   lastMessage: string | null;
   lastAt: string | null;
   unread: number;
@@ -153,7 +155,7 @@ export class ChatService {
     const response = await this.client.get<unknown>('/rest/chats', {
       query: {
         filter: `id[in]:[${ids.join(',')}]`,
-        select: 'id,name,tip,vremyaPoslednego,posledneeSoobshchenie',
+        select: 'id,name,tip,kanal,vremyaPoslednego,posledneeSoobshchenie',
         limit: 60,
       },
     });
@@ -163,6 +165,7 @@ export class ChatService {
         id: String(chat.id ?? ''),
         name: asString(chat.name) ?? 'Без названия',
         tip: asString(chat.tip),
+        kanal: asString(chat.kanal),
         lastMessage: asString(chat.posledneeSoobshchenie),
         lastAt: asString(chat.vremyaPoslednego),
         unread: unreadByChat.get(String(chat.id ?? '')) ?? 0,

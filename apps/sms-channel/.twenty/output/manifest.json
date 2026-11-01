@@ -47,6 +47,36 @@
       "builtHandlerChecksum": "85d23f95a9c284508a92687df697a7e6"
     },
     {
+      "universalIdentifier": "7ffc6061-a066-405d-b3a6-1e4f47f2bab7",
+      "name": "sms-channel-connect",
+      "description": "Подключение телефона: проверка устройства и запись шлюза",
+      "timeoutSeconds": 30,
+      "httpRouteTriggerSettings": {
+        "path": "/sms-channel-connect",
+        "httpMethod": "POST",
+        "isAuthRequired": true
+      },
+      "handlerName": "default.config.handler",
+      "sourceHandlerPath": "src/logic-functions/sms-channel-connect.logic-function.ts",
+      "builtHandlerPath": "src/logic-functions/sms-channel-connect.logic-function.mjs",
+      "builtHandlerChecksum": "164fe137db1e24ee04899132dfd7f7f1"
+    },
+    {
+      "universalIdentifier": "963a7fc1-1f45-4890-9bed-27e6d3a35477",
+      "name": "sms-channel-info",
+      "description": "Адрес сервера шлюза и токен для подключения телефона",
+      "timeoutSeconds": 15,
+      "httpRouteTriggerSettings": {
+        "path": "/sms-channel-info",
+        "httpMethod": "GET",
+        "isAuthRequired": true
+      },
+      "handlerName": "default.config.handler",
+      "sourceHandlerPath": "src/logic-functions/sms-channel-info.logic-function.ts",
+      "builtHandlerPath": "src/logic-functions/sms-channel-info.logic-function.mjs",
+      "builtHandlerChecksum": "2159399160a4cdecbf82fd648b352c12"
+    },
+    {
       "universalIdentifier": "a4272584-eca6-44c1-9291-458dc480cec3",
       "name": "sms-inbound",
       "description": "Входящие SMS с Android-шлюза → диалог «Центра коммуникации»",
@@ -63,6 +93,21 @@
       "sourceHandlerPath": "src/logic-functions/sms-inbound.logic-function.ts",
       "builtHandlerPath": "src/logic-functions/sms-inbound.logic-function.mjs",
       "builtHandlerChecksum": "ba8f7a884a0658f8bdcb3312a8975b5a"
+    },
+    {
+      "universalIdentifier": "b42085c7-0923-4dcb-85af-e1c8d7c93fae",
+      "name": "sms-channels",
+      "description": "Мои каналы: подключённые телефоны сотрудника",
+      "timeoutSeconds": 30,
+      "httpRouteTriggerSettings": {
+        "path": "/sms-channels",
+        "httpMethod": "GET",
+        "isAuthRequired": true
+      },
+      "handlerName": "default.config.handler",
+      "sourceHandlerPath": "src/logic-functions/sms-channels.logic-function.ts",
+      "builtHandlerPath": "src/logic-functions/sms-channels.logic-function.mjs",
+      "builtHandlerChecksum": "c332e5a8d24811cdca816cbadf8f9aa9"
     },
     {
       "universalIdentifier": "bea95bca-aa3e-4af2-b1f7-9a0d8a38b9a9",
