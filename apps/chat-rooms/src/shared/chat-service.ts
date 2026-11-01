@@ -22,6 +22,8 @@ export type DialogView = {
   tip: string | null;
   /** Канал связи: SMS, TG, MAX или внутренний чат. */
   kanal: string | null;
+  /** Номер, с которого идёт переписка (для каналов связи). */
+  nomer: string | null;
   lastMessage: string | null;
   lastAt: string | null;
   unread: number;
@@ -43,6 +45,17 @@ export type MessageView = {
   /** Направление и статус доставки — есть только у сообщений каналов связи. */
   napravlenie: string | null;
   statusDostavki: string | null;
+};
+
+/**
+ * Номер из внешнего ключа диалога: `sms:<deviceId>:<10 цифр>`.
+ * Для внутренних диалогов ключа нет — вернётся null.
+ */
+const numberFromExternalId = (value: string | null): string | null => {
+  const parts = String(value ?? '').split(':');
+  const tail = parts[parts.length - 1] ?? '';
+
+  return /^\d{10}$/.test(tail) ? tail : null;
 };
 
 /** Смотрел ли сотрудник диалог в последние секунды (отметка «прочитано» свежая). */
@@ -158,7 +171,7 @@ export class ChatService {
     const response = await this.client.get<unknown>('/rest/chats', {
       query: {
         filter: `id[in]:[${ids.join(',')}]`,
-        select: 'id,name,tip,kanal,vremyaPoslednego,posledneeSoobshchenie',
+        select: 'id,name,tip,kanal,vneshniyId,vremyaPoslednego,posledneeSoobshchenie',
         limit: 60,
       },
     });
@@ -169,6 +182,7 @@ export class ChatService {
         name: asString(chat.name) ?? 'Без названия',
         tip: asString(chat.tip),
         kanal: asString(chat.kanal),
+        nomer: numberFromExternalId(asString(chat.vneshniyId)),
         lastMessage: asString(chat.posledneeSoobshchenie),
         lastAt: asString(chat.vremyaPoslednego),
         unread: unreadByChat.get(String(chat.id ?? '')) ?? 0,

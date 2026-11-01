@@ -24,6 +24,8 @@ type Dialog = {
   tip: string | null;
   /** Канал: SMS, TG, MAX или внутренний. */
   kanal: string | null;
+  /** Номер канала, с которого идёт переписка. */
+  nomer: string | null;
   lastMessage: string | null;
   lastAt: string | null;
   unread: number;
@@ -44,6 +46,14 @@ type Message = {
   mentions?: MentionView[];
   napravlenie?: string | null;
   statusDostavki?: string | null;
+};
+
+const formatChannelPhone = (value: string | null): string => {
+  const digits = String(value ?? '').replace(/\D/g, '');
+
+  if (digits.length !== 10) return '';
+
+  return `+7 ${digits.slice(0, 3)} ${digits.slice(3, 6)}-${digits.slice(6, 8)}-${digits.slice(8)}`;
 };
 
 /** Подпись статуса доставки под исходящим сообщением канала связи. */
@@ -1102,9 +1112,17 @@ const ChatCenter = () => {
                 gap: '10px',
               }}
             >
-              <span style={{ fontSize: '14px', fontWeight: 600 }}>
-                {activeChat.name || 'Без названия'}
-              </span>
+              <div>
+                <span style={{ fontSize: '14px', fontWeight: 600 }}>
+                  {activeChat.name || 'Без названия'}
+                </span>
+                {activeChat.nomer && (
+                  <div style={{ fontSize: '11px', color: '#888', marginTop: '1px' }}>
+                    {activeChat.kanal ? `${activeChat.kanal} · ` : ''}
+                    {formatChannelPhone(activeChat.nomer)}
+                  </div>
+                )}
+              </div>
               <span
                 style={{
                   fontSize: '11px',
