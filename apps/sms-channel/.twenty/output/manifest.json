@@ -1,0 +1,65 @@
+{
+  "application": {
+    "universalIdentifier": "2ab71610-5699-4e6b-9160-29e15531d843",
+    "displayName": "SMS-канал",
+    "description": "Приём входящих SMS с Android-шлюза и запись в «Центр коммуникации»",
+    "galleryImages": [],
+    "defaultRoleUniversalIdentifier": "ba5374bc-0051-454e-97c6-f39f3199a506",
+    "yarnLockChecksum": "3a09ebeb95f004114cffa5f00c1728c7",
+    "packageJsonChecksum": "0887a6221ec5eb4b36e5a0709240fc71",
+    "requiredServerVersionRange": null
+  },
+  "objects": [],
+  "fields": [],
+  "indexes": [],
+  "permissionFlags": [],
+  "roles": [
+    {
+      "universalIdentifier": "ba5374bc-0051-454e-97c6-f39f3199a506",
+      "label": "SMS-канал — роль",
+      "description": "SMS-канал — роль",
+      "canReadAllObjectRecords": true,
+      "canUpdateAllObjectRecords": true,
+      "canSoftDeleteAllObjectRecords": true,
+      "canDestroyAllObjectRecords": false,
+      "objectPermissions": [],
+      "fieldPermissions": [],
+      "rowLevelPermissionPredicateGroups": [],
+      "rowLevelPermissionPredicates": [],
+      "permissionFlagUniversalIdentifiers": []
+    }
+  ],
+  "skills": [],
+  "agents": [],
+  "connectionProviders": [],
+  "logicFunctions": [
+    {
+      "universalIdentifier": "a4272584-eca6-44c1-9291-458dc480cec3",
+      "name": "sms-inbound",
+      "description": "Входящие SMS с Android-шлюза → диалог «Центра коммуникации»",
+      "timeoutSeconds": 30,
+      "httpRouteTriggerSettings": {
+        "path": "/sms-inbound",
+        "httpMethod": "POST",
+        "isAuthRequired": false,
+        "forwardedRequestHeaders": [
+          "content-type"
+        ]
+      },
+      "handlerName": "default.config.handler",
+      "sourceHandlerPath": "src/logic-functions/sms-inbound.logic-function.ts",
+      "builtHandlerPath": "src/logic-functions/sms-inbound.logic-function.mjs",
+      "builtHandlerChecksum": "cafce6955d7be58408e22fdbd757ea28"
+    }
+  ],
+  "frontComponents": [],
+  "publicAssets": [],
+  "views": [],
+  "viewFields": [],
+  "navigationMenuItems": [],
+  "pageLayouts": [],
+  "pageLayoutTabs": [],
+  "commandMenuItems": [],
+  "timelineActivityTypes": [],
+  "translations": {}
+}

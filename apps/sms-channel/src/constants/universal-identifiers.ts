@@ -1,0 +1,13 @@
+export const APP_DISPLAY_NAME = 'SMS-канал';
+export const APP_DESCRIPTION =
+  'Приём входящих SMS с Android-шлюза и запись в «Центр коммуникации»';
+
+export const APPLICATION_UNIVERSAL_IDENTIFIER = '2ab71610-5699-4e6b-9160-29e15531d843';
+export const DEFAULT_ROLE_UNIVERSAL_IDENTIFIER = 'ba5374bc-0051-454e-97c6-f39f3199a506';
+
+/** Публичный маршрут приёма: https://crm.kplus79.ru/s/sms-inbound */
+export const INBOUND_ROUTE_PATH = '/sms-inbound';
+
+/** Логик-функция приёма входящих SMS. */
+export const SMS_INBOUND_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'a4272584-eca6-44c1-9291-458dc480cec3';
