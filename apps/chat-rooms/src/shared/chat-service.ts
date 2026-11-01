@@ -347,11 +347,30 @@ export class ChatService {
     return { messages, names };
   }
 
+  /** Подписать сотрудника участником диалога (он ответственный по сделке). */
+  async ensureParticipant(memberId: string, chatId: string): Promise<void> {
+    const existing = await this.client.get<unknown>('/rest/chatParticipants', {
+      query: {
+        filter: `and(chatId[eq]:"${chatId}",polzovatelId[eq]:"${memberId}")`,
+        limit: 1,
+      },
+    });
+
+    if (rowsOf(existing, 'chatParticipants').length > 0) return;
+
+    await this.client.post<unknown>('/rest/chatParticipants', {
+      chatId,
+      polzovatelId: memberId,
+      neprochitano: 0,
+    });
+  }
+
   async send(
     memberId: string,
     chatId: string,
     text: string,
     mentions: MentionView[] = [],
+    extra: Record<string, unknown> = {},
   ): Promise<{ id: string }> {
     await this.assertParticipant(memberId, chatId);
 
@@ -362,6 +381,7 @@ export class ChatService {
         avtorId: memberId,
         napravlenie: 'ISHODYASHCHIE',
         statusDostavki: 'DOSTAVLENO',
+        ...extra,
       }),
     );
 

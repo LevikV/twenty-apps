@@ -51,3 +51,17 @@ export const CHAT_MEMBERS_FUNCTION_UNIVERSAL_IDENTIFIER =
   'efd489f7-4467-4937-af7a-b1d67314a5f6';
 export const CHAT_PERSONAL_CREATE_FUNCTION_UNIVERSAL_IDENTIFIER =
   '1071fa3d-48ba-425d-95da-3947f58d17ef';
+
+/** Переписка с клиентом в карточке сделки. */
+export const CHAT_CLIENT_THREAD_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'b3aaf16f-5671-45bf-92a2-acae7d999fc0';
+
+/** Ответ клиенту из карточки сделки с привязкой сообщения к сделке. */
+export const CHAT_CLIENT_SEND_FUNCTION_UNIVERSAL_IDENTIFIER =
+  '04db391c-c9bb-4a23-900e-ec0d8d9dc8d5';
+
+/** Переписка с клиентом в карточке сделки (фронт-компонент). */
+export const CARD_CLIENT_CHAT_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
+  '37c00d48-f9f2-46c3-ae3d-4bf92b8ad5bd';
+
+
