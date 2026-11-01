@@ -49,7 +49,7 @@
       "handlerName": "default.config.handler",
       "sourceHandlerPath": "src/logic-functions/sms-inbound.logic-function.ts",
       "builtHandlerPath": "src/logic-functions/sms-inbound.logic-function.mjs",
-      "builtHandlerChecksum": "cafce6955d7be58408e22fdbd757ea28"
+      "builtHandlerChecksum": "ba8f7a884a0658f8bdcb3312a8975b5a"
     }
   ],
   "frontComponents": [],

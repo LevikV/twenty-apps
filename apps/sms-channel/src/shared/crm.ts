@@ -208,8 +208,9 @@ export const saveIncoming = async (params: {
   externalId: string;
   text: string;
   receivedAt: string;
+  svyazkaId: string;
 }): Promise<{ created: boolean; id: string }> => {
-  const { chatId, externalId, text, receivedAt } = params;
+  const { chatId, externalId, text, receivedAt, svyazkaId } = params;
 
   const existing = rowsOf(
     await client.get<unknown>('/rest/soobshcheniya', {
@@ -220,22 +221,42 @@ export const saveIncoming = async (params: {
 
   if (existing?.id) return { created: false, id: existing.id };
 
-  const created = pickCreated(
-    await client.post<unknown>('/rest/soobshcheniya', {
-      name: text.slice(0, 80) || 'SMS',
-      chatId,
-      tekst: text,
-      napravlenie: 'VHODYASHCHIE',
-      statusDostavki: 'DOSTAVLENO',
-      vneshniyId: externalId,
-    }),
-  );
+  const payload: Record<string, unknown> = {
+    name: text.slice(0, 80) || 'SMS',
+    chatId,
+    tekst: text,
+    napravlenie: 'VHODYASHCHIE',
+    statusDostavki: 'DOSTAVLENO',
+    vneshniyId: externalId,
+  };
+
+  if (svyazkaId) payload.svyazkaId = svyazkaId;
+
+  const created = pickCreated(await client.post<unknown>('/rest/soobshcheniya', payload));
 
   if (!created?.id) throw new Error('сообщение создано, но в ответе нет id');
 
   void receivedAt;
 
   return { created: true, id: created.id };
+};
+
+/**
+ * Связка диалога со сделкой, если она одна.
+ *
+ * Клиент пишет сам, вне карточки — контекста нет. Если у диалога ровно одна
+ * сделка, ошибки не будет: относим входящее к ней. Если сделок несколько —
+ * не гадаем, сообщение остаётся без привязки (привяжется ответом из карточки).
+ */
+export const findSoleTarget = async (chatId: string): Promise<string> => {
+  const rows = rowsOf(
+    await client.get<unknown>('/rest/chatTargets', {
+      query: { filter: `chatId[eq]:"${chatId}"`, limit: 3 },
+    }),
+    'chatTargets',
+  );
+
+  return rows.length === 1 ? String(rows[0].id ?? '') : '';
 };
 
 /** Карточка диалога: последнее сообщение, время, счётчик непрочитанных. */

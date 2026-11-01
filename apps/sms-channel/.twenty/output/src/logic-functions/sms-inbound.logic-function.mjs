@@ -5706,7 +5706,7 @@ var ensureParticipant = async (chatId, memberId) => {
   });
 };
 var saveIncoming = async (params) => {
-  const { chatId, externalId, text, receivedAt } = params;
+  const { chatId, externalId, text, receivedAt, svyazkaId } = params;
   const existing = rowsOf(
     await client.get("/rest/soobshcheniya", {
       query: { filter: `vneshniyId[eq]:"${externalId}"`, limit: 1 }
@@ -5714,19 +5714,28 @@ var saveIncoming = async (params) => {
     "soobshcheniya"
   )[0];
   if (existing?.id) return { created: false, id: existing.id };
-  const created = pickCreated(
-    await client.post("/rest/soobshcheniya", {
-      name: text.slice(0, 80) || "SMS",
-      chatId,
-      tekst: text,
-      napravlenie: "VHODYASHCHIE",
-      statusDostavki: "DOSTAVLENO",
-      vneshniyId: externalId
-    })
-  );
+  const payload = {
+    name: text.slice(0, 80) || "SMS",
+    chatId,
+    tekst: text,
+    napravlenie: "VHODYASHCHIE",
+    statusDostavki: "DOSTAVLENO",
+    vneshniyId: externalId
+  };
+  if (svyazkaId) payload.svyazkaId = svyazkaId;
+  const created = pickCreated(await client.post("/rest/soobshcheniya", payload));
   if (!created?.id) throw new Error("\u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0435 \u0441\u043E\u0437\u0434\u0430\u043D\u043E, \u043D\u043E \u0432 \u043E\u0442\u0432\u0435\u0442\u0435 \u043D\u0435\u0442 id");
   void receivedAt;
   return { created: true, id: created.id };
+};
+var findSoleTarget = async (chatId) => {
+  const rows = rowsOf(
+    await client.get("/rest/chatTargets", {
+      query: { filter: `chatId[eq]:"${chatId}"`, limit: 3 }
+    }),
+    "chatTargets"
+  );
+  return rows.length === 1 ? String(rows[0].id ?? "") : "";
 };
 var touchChat = async (params) => {
   const { chatId, text, receivedAt, unreadBefore } = params;
@@ -5762,6 +5771,55 @@ var touchGateway = async (gatewayId, at3) => {
     posledniyKontakt: at3,
     status: "NA_SVYAZI"
   });
+};
+
+// src/shared/notify.ts
+var client2 = new u2({ runAs: "application" });
+var CHAT_PAGE_PATH = "/page/30e9b2da-683c-4fce-8a61-5c5102d69f3e";
+var apiBase = () => String(
+  globalThis.process?.env?.TWENTY_API_URL ?? ""
+).replace(/\/+$/, "");
+var memberUserId = async (memberId) => {
+  if (!memberId) return null;
+  const response = await client2.get(`/rest/workspaceMembers/${memberId}`, {
+    query: { select: "id,userId" }
+  });
+  const userId = response?.data?.workspaceMember?.userId;
+  return typeof userId === "string" && userId.length > 0 ? userId : null;
+};
+var notifyIncoming = async (params) => {
+  const { memberId, chatId, title, text } = params;
+  const base = apiBase();
+  if (!base) return "\u043D\u0435\u0442 \u0431\u0430\u0437\u044B";
+  const userId = await memberUserId(memberId);
+  if (!userId) return "\u043D\u0435\u0442 userId";
+  const body = {
+    userId,
+    title,
+    text: text.slice(0, 140),
+    variant: "info",
+    tip: "soobshchenie",
+    prioritet: "obychnoe",
+    link: `${CHAT_PAGE_PATH}?chatId=${chatId}`,
+    linkLabel: "\u041E\u0442\u043A\u0440\u044B\u0442\u044C \u0447\u0430\u0442",
+    duration: 1e4,
+    persist: false
+  };
+  try {
+    await fetch(`${base}/api/notify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    await fetch(`${base}/api/notify/badge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, chatId })
+    });
+    return "ok";
+  } catch {
+    return "\u043E\u0448\u0438\u0431\u043A\u0430";
+  }
 };
 
 // src/shared/sms.ts
@@ -5812,30 +5870,33 @@ var handler = async (event) => {
       headers: { "content-type": "application/json" }
     });
   }
-  const client2 = await findClient(incoming.phone).catch((error) => {
+  const client3 = await findClient(incoming.phone).catch((error) => {
     errors.push(`\u043A\u043B\u0438\u0435\u043D\u0442: ${describeError(error)}`);
     return { personId: "", personName: "", companyId: "", companyName: "" };
   });
-  const title = client2.personName || client2.companyName ? `${formatPhone(incoming.phone)} \u2014 ${client2.personName || client2.companyName}` : formatPhone(incoming.phone);
+  const title = client3.personName || client3.companyName ? `${formatPhone(incoming.phone)} \u2014 ${client3.personName || client3.companyName}` : formatPhone(incoming.phone);
   let chatId = "";
   let chatCreated = false;
   let messageCreated = false;
   let messageId = "";
+  let notifyState = "";
   try {
     const chat = await ensureChat({
       externalId: `sms:${incoming.gatewayDeviceId}:${incoming.phone}`,
       title,
       gatewayId: gateway.id,
-      client: client2
+      client: client3
     });
     chatId = chat.id;
     chatCreated = chat.created;
     await ensureParticipant(chatId, gateway.memberId);
+    const svyazkaId = await findSoleTarget(chatId).catch(() => "");
     const saved = await saveIncoming({
       chatId,
       externalId: incoming.externalId,
       text: incoming.text,
-      receivedAt: incoming.receivedAt
+      receivedAt: incoming.receivedAt,
+      svyazkaId
     });
     messageCreated = saved.created;
     messageId = saved.id;
@@ -5848,6 +5909,12 @@ var handler = async (event) => {
         unreadBefore
       });
       await bumpParticipantUnread(chatId, gateway.memberId);
+      notifyState = await notifyIncoming({
+        memberId: gateway.memberId,
+        chatId,
+        title,
+        text: incoming.text
+      });
     }
   } catch (error) {
     errors.push(`\u0434\u0438\u0430\u043B\u043E\u0433: ${describeError(error)}`);
@@ -5862,15 +5929,16 @@ var handler = async (event) => {
     source: "sms-channel",
     gateway: gateway.name,
     member: gateway.memberId ? "\u043D\u0430\u0439\u0434\u0435\u043D" : "\u043D\u0435\u0442 \u0443\u0447\u0451\u0442\u043D\u043E\u0439 \u0437\u0430\u043F\u0438\u0441\u0438",
-    client: client2.personName || client2.companyName || "\u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D",
+    client: client3.personName || client3.companyName || "\u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D",
     chatId,
     chatCreated,
     messageId,
+    notify: notifyState,
     duplicate: Boolean(chatId) && !messageCreated,
     signature: incoming.signature ? "\u0435\u0441\u0442\u044C" : "\u043D\u0435\u0442",
     errors
   };
-  await Oa.set("sms:last", { incoming, gateway, client: client2, answer });
+  await Oa.set("sms:last", { incoming, gateway, client: client3, answer });
   return new ka(JSON.stringify(answer), {
     status: 200,
     headers: { "content-type": "application/json" }

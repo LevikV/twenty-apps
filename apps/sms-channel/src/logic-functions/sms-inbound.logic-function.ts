@@ -9,11 +9,13 @@ import {
   ensureParticipant,
   findClient,
   findGateway,
+  findSoleTarget,
   readChatUnread,
   saveIncoming,
   touchChat,
   touchGateway,
 } from 'src/shared/crm';
+import { notifyIncoming } from 'src/shared/notify';
 import { formatPhone, parseIncoming } from 'src/shared/sms';
 
 /**
@@ -67,6 +69,7 @@ const handler = async (event: RoutePayload) => {
   let chatCreated = false;
   let messageCreated = false;
   let messageId = '';
+  let notifyState = '';
 
   try {
     const chat = await ensureChat({
@@ -81,11 +84,14 @@ const handler = async (event: RoutePayload) => {
 
     await ensureParticipant(chatId, gateway.memberId);
 
+    const svyazkaId = await findSoleTarget(chatId).catch(() => '');
+
     const saved = await saveIncoming({
       chatId,
       externalId: incoming.externalId,
       text: incoming.text,
       receivedAt: incoming.receivedAt,
+      svyazkaId,
     });
 
     messageCreated = saved.created;
@@ -101,6 +107,13 @@ const handler = async (event: RoutePayload) => {
         unreadBefore,
       });
       await bumpParticipantUnread(chatId, gateway.memberId);
+
+      notifyState = await notifyIncoming({
+        memberId: gateway.memberId,
+        chatId,
+        title: title,
+        text: incoming.text,
+      });
     }
   } catch (error) {
     errors.push(`диалог: ${describeError(error)}`);
@@ -121,6 +134,7 @@ const handler = async (event: RoutePayload) => {
     chatId,
     chatCreated,
     messageId,
+    notify: notifyState,
     duplicate: Boolean(chatId) && !messageCreated,
     signature: incoming.signature ? 'есть' : 'нет',
     errors,
