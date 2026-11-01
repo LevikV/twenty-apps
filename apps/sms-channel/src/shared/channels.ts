@@ -97,7 +97,7 @@ export const workPhoneOf = async (memberId: string): Promise<string> => {
 export const myChannels = async (memberId: string): Promise<Row[]> => {
   const response = await client.get<unknown>('/rest/smsGateways', {
     query: {
-      filter: `sotrudnikId[eq]:"${memberId}"`,
+      filter: `and(sotrudnikId[eq]:"${memberId}",deviceId[is]:NOT_NULL)`,
       select: 'id,name,nomer,status,deviceId,login,posledniyKontakt,limitVChas',
       limit: 20,
       orderBy: 'createdAt',
@@ -181,6 +181,59 @@ export const connectChannel = async (
   )[0];
 
   return { ok: true, gatewayId: String(created?.id ?? ''), created: true, nomer };
+};
+
+/**
+ * Отключение канала.
+ *
+ * Устройство отзываем на сервере шлюза — оно перестаёт отправлять и принимать
+ * SMS. Учётные данные и `deviceId` в карточке очищаем, номер остаётся: история
+ * переписки и привязки к сделкам сохраняются.
+ */
+export const disconnectChannel = async (
+  memberId: string,
+  gatewayId: string,
+): Promise<{ ok: boolean; error?: string }> => {
+  const response = (await client.get<unknown>(`/rest/smsGateways/${gatewayId}`, {
+    query: { select: 'id,name,sotrudnikId,login,parol,deviceId' },
+  })) as { data?: { smsGateway?: Row } };
+
+  const row = response?.data?.smsGateway;
+
+  if (!row?.id) return { ok: false, error: 'Канал не найден' };
+
+  if (String(row.sotrudnikId ?? '') !== memberId) {
+    return { ok: false, error: 'Это не ваш канал — отключить может только владелец' };
+  }
+
+  const deviceId = String(row.deviceId ?? '');
+  const login = String(row.login ?? '');
+  const parol = String(row.parol ?? '');
+
+  if (deviceId && login && parol) {
+    try {
+      const removed = await fetch(`${GATEWAY_API}/3rdparty/v1/devices/${deviceId}`, {
+        method: 'DELETE',
+        headers: { Authorization: basic(login, parol) },
+      });
+
+      // 404 — устройство уже удалено вручную: это не ошибка для нас.
+      if (!removed.ok && removed.status !== 404) {
+        return { ok: false, error: `Сервер шлюза отказал: HTTP ${removed.status}` };
+      }
+    } catch (error) {
+      return { ok: false, error: `Сервер шлюза недоступен: ${String(error).slice(0, 120)}` };
+    }
+  }
+
+  await client.patch<unknown>(`/rest/smsGateways/${gatewayId}`, {
+    deviceId: '',
+    login: '',
+    parol: '',
+    status: 'NET_SVYAZI',
+  });
+
+  return { ok: true };
 };
 
 /** Приводим номер к 10 цифрам: +7 924 747-01-69 → 9247470169. */

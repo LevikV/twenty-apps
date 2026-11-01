@@ -5543,7 +5543,7 @@ var client2 = new u2({ runAs: "application" });
 var myChannels = async (memberId) => {
   const response = await client2.get("/rest/smsGateways", {
     query: {
-      filter: `sotrudnikId[eq]:"${memberId}"`,
+      filter: `and(sotrudnikId[eq]:"${memberId}",deviceId[is]:NOT_NULL)`,
       select: "id,name,nomer,status,deviceId,login,posledniyKontakt,limitVChas",
       limit: 20,
       orderBy: "createdAt"

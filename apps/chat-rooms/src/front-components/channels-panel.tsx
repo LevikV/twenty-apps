@@ -169,6 +169,36 @@ export const ChannelsPanel = ({ onClose }: { onClose: () => void }) => {
     void load();
   }, [load]);
 
+  const disconnect = async (gatewayId: string) => {
+    const confirmed =
+      typeof window === 'undefined' ||
+      window.confirm('Отключить канал? Телефон перестанет принимать и отправлять SMS. История переписки останется.');
+
+    if (!confirmed) return;
+
+    setBusy(true);
+    setError(null);
+    setDone(null);
+
+    try {
+      const result = await callRoute<{ ok: boolean; error?: string }>('/sms-channel-disconnect', {
+        method: 'POST',
+        body: { gatewayId },
+      });
+
+      if (!result.ok) {
+        setError(result.error ?? 'Не удалось отключить канал');
+      } else {
+        setDone('Канал отключён, телефон больше не связан с CRM');
+        await load();
+      }
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const connect = async () => {
     setBusy(true);
     setError(null);
@@ -253,9 +283,27 @@ export const ChannelsPanel = ({ onClose }: { onClose: () => void }) => {
                 </span>
               </div>
 
-              <div style={{ fontSize: '12px', color: '#777', marginTop: '8px' }}>
-                Связь: {formatSeen(channel.posledniyKontakt)}
-                {channel.limitVChas ? ` · лимит ${channel.limitVChas} SMS/час` : ''}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginTop: '8px' }}>
+                <div style={{ fontSize: '12px', color: '#777' }}>
+                  Связь: {formatSeen(channel.posledniyKontakt)}
+                  {channel.limitVChas ? ` · лимит ${channel.limitVChas} SMS/час` : ''}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void disconnect(channel.id)}
+                  disabled={busy}
+                  style={{
+                    border: '1px solid #f0c2c2',
+                    background: '#fff',
+                    color: '#c03b2c',
+                    borderRadius: '6px',
+                    padding: '4px 10px',
+                    fontSize: '12px',
+                    cursor: busy ? 'default' : 'pointer',
+                  }}
+                >
+                  Отключить
+                </button>
               </div>
             </div>
           ))}

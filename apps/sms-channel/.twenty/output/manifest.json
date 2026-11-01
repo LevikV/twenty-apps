@@ -77,6 +77,21 @@
       "builtHandlerChecksum": "2159399160a4cdecbf82fd648b352c12"
     },
     {
+      "universalIdentifier": "9736c2d7-b7a6-465d-84a9-0b5e7ce13904",
+      "name": "sms-channel-disconnect",
+      "description": "Отключение SMS-канала сотрудника",
+      "timeoutSeconds": 30,
+      "httpRouteTriggerSettings": {
+        "path": "/sms-channel-disconnect",
+        "httpMethod": "POST",
+        "isAuthRequired": true
+      },
+      "handlerName": "default.config.handler",
+      "sourceHandlerPath": "src/logic-functions/sms-channel-disconnect.logic-function.ts",
+      "builtHandlerPath": "src/logic-functions/sms-channel-disconnect.logic-function.mjs",
+      "builtHandlerChecksum": "ccc414b423181c9f051bf6ae1a3c3a41"
+    },
+    {
       "universalIdentifier": "a4272584-eca6-44c1-9291-458dc480cec3",
       "name": "sms-inbound",
       "description": "Входящие SMS с Android-шлюза → диалог «Центра коммуникации»",
@@ -107,7 +122,7 @@
       "handlerName": "default.config.handler",
       "sourceHandlerPath": "src/logic-functions/sms-channels.logic-function.ts",
       "builtHandlerPath": "src/logic-functions/sms-channels.logic-function.mjs",
-      "builtHandlerChecksum": "c332e5a8d24811cdca816cbadf8f9aa9"
+      "builtHandlerChecksum": "28acb333416ea6e5f648618eed2dcf9d"
     },
     {
       "universalIdentifier": "bea95bca-aa3e-4af2-b1f7-9a0d8a38b9a9",
