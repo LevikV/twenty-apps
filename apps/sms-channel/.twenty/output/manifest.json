@@ -59,7 +59,7 @@
       "handlerName": "default.config.handler",
       "sourceHandlerPath": "src/logic-functions/sms-channel-connect.logic-function.ts",
       "builtHandlerPath": "src/logic-functions/sms-channel-connect.logic-function.mjs",
-      "builtHandlerChecksum": "164fe137db1e24ee04899132dfd7f7f1"
+      "builtHandlerChecksum": "5a14d220f207a73d38e19b0cb5e32c8e"
     },
     {
       "universalIdentifier": "963a7fc1-1f45-4890-9bed-27e6d3a35477",

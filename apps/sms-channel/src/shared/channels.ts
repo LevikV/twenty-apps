@@ -112,6 +112,7 @@ export const connectChannel = async (
   memberId: string,
   login: string,
   parol: string,
+  manualPhone?: string,
 ): Promise<{ ok: boolean; error?: string; gatewayId?: string; created?: boolean; nomer?: string }> => {
   const cleanLogin = login.trim();
   const cleanParol = parol.trim();
@@ -122,12 +123,27 @@ export const connectChannel = async (
 
   if (!check.ok) return { ok: false, error: check.error };
 
-  const nomer = await workPhoneOf(memberId);
+  // Номер: введённый вручную важнее номера должности — у сотрудника может быть
+  // вторая симка. Пустое поле — берём рабочий номер должности.
+  const manual = normalizePhone(manualPhone);
+  const nomer = manual || (await workPhoneOf(memberId));
 
   if (!nomer) {
     return {
       ok: false,
-      error: 'У вашей должности не заполнен рабочий номер — обратитесь к администратору',
+      error: 'У вашей должности не заполнен рабочий номер — укажите номер вручную',
+    };
+  }
+
+  const busy = await numberOwner(nomer, check.deviceId);
+
+  if (busy) {
+    return {
+      ok: false,
+      error:
+        busy === memberId
+          ? 'Этот номер уже подключён на другом устройстве'
+          : 'Этот номер уже подключён другим сотрудником',
     };
   }
 
@@ -164,6 +180,40 @@ export const connectChannel = async (
   )[0];
 
   return { ok: true, gatewayId: String(created?.id ?? ''), created: true, nomer };
+};
+
+/** Приводим номер к 10 цифрам: +7 924 747-01-69 → 9247470169. */
+export const normalizePhone = (value?: string): string => {
+  const digits = String(value ?? '').replace(/\D/g, '');
+
+  if (digits.length === 11 && digits.startsWith('7')) return digits.slice(1);
+  if (digits.length === 11 && digits.startsWith('8')) return digits.slice(1);
+
+  return digits.length === 10 ? digits : '';
+};
+
+const phoneOf = (value: unknown): string => {
+  if (value && typeof value === 'object') {
+    return String((value as { primaryPhoneNumber?: string }).primaryPhoneNumber ?? '').replace(/\D/g, '');
+  }
+
+  return String(value ?? '').replace(/\D/g, '');
+};
+
+/** Чей это номер: пусто — свободен, иначе id сотрудника-владельца. */
+const numberOwner = async (nomer: string, ownDeviceId: string): Promise<string> => {
+  const rows = rowsOf(
+    await client.get<unknown>('/rest/smsGateways', {
+      query: { select: 'id,nomer,deviceId,sotrudnikId', limit: 100 },
+    }),
+    'smsGateways',
+  );
+
+  const taken = rows.find(
+    (row) => phoneOf(row.nomer) === nomer && String(row.deviceId ?? '') !== ownDeviceId,
+  );
+
+  return taken ? String(taken.sotrudnikId ?? 'занят') : '';
 };
 
 /** Данные для инструкции в интерфейсе. */

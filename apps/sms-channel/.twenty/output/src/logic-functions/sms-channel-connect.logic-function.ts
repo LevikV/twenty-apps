@@ -24,12 +24,13 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
     });
   }
 
-  const body = (event.body ?? {}) as { login?: string; parol?: string };
+  const body = (event.body ?? {}) as { login?: string; parol?: string; nomer?: string };
   const login = String(body.login ?? '').trim();
   const parol = String(body.parol ?? '').trim();
+  const nomer = String(body.nomer ?? '').trim();
 
   try {
-    const result = await connectChannel(context.workspaceMemberId, login, parol);
+    const result = await connectChannel(context.workspaceMemberId, login, parol, nomer);
 
     return new Response(JSON.stringify(result), {
       status: result.ok ? 200 : 400,

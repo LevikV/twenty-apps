@@ -143,6 +143,7 @@ export const ChannelsPanel = ({ onClose }: { onClose: () => void }) => {
   const [info, setInfo] = useState<{ serverAddress: string; privateToken: string } | null>(null);
   const [login, setLogin] = useState('');
   const [parol, setParol] = useState('');
+  const [nomer, setNomer] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -176,7 +177,7 @@ export const ChannelsPanel = ({ onClose }: { onClose: () => void }) => {
     try {
       const result = await callRoute<{ ok: boolean; error?: string; nomer?: string }>(
         '/sms-channel-connect',
-        { method: 'POST', body: { login, parol } },
+        { method: 'POST', body: { login, parol, nomer } },
       );
 
       if (!result.ok) {
@@ -185,6 +186,7 @@ export const ChannelsPanel = ({ onClose }: { onClose: () => void }) => {
         setDone(`Телефон подключён. Клиентские SMS пойдут с номера ${formatPhone(result.nomer)}`);
         setLogin('');
         setParol('');
+        setNomer('');
         await load();
       }
     } catch (caught) {
@@ -359,6 +361,24 @@ export const ChannelsPanel = ({ onClose }: { onClose: () => void }) => {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '12px 0' }}>
             {step(3, 'В приложении появится логин и пароль устройства — введите их здесь:')}
+          </div>
+
+          <input
+            value={nomer}
+            onChange={(event) => setNomer(event.target.value)}
+            placeholder="Номер телефона (необязательно)"
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              border: '1px solid #d6d6d6',
+              borderRadius: '6px',
+              padding: '8px 10px',
+              fontSize: '13px',
+              marginBottom: '4px',
+            }}
+          />
+          <div style={{ fontSize: '11px', color: '#999', marginBottom: '8px' }}>
+            Пусто — возьмём номер вашей должности
           </div>
 
           <input

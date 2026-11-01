@@ -5586,17 +5586,25 @@ var workPhoneOf = async (memberId) => {
   const digits = String(phones?.primaryPhoneNumber ?? "").replace(/\D/g, "");
   return digits;
 };
-var connectChannel = async (memberId, login, parol) => {
+var connectChannel = async (memberId, login, parol, manualPhone) => {
   const cleanLogin = login.trim();
   const cleanParol = parol.trim();
   if (!cleanLogin || !cleanParol) return { ok: false, error: "\u0417\u0430\u043F\u043E\u043B\u043D\u0438\u0442\u0435 \u043B\u043E\u0433\u0438\u043D \u0438 \u043F\u0430\u0440\u043E\u043B\u044C \u0443\u0441\u0442\u0440\u043E\u0439\u0441\u0442\u0432\u0430" };
   const check = await checkDevice(cleanLogin, cleanParol);
   if (!check.ok) return { ok: false, error: check.error };
-  const nomer = await workPhoneOf(memberId);
+  const manual = normalizePhone(manualPhone);
+  const nomer = manual || await workPhoneOf(memberId);
   if (!nomer) {
     return {
       ok: false,
-      error: "\u0423 \u0432\u0430\u0448\u0435\u0439 \u0434\u043E\u043B\u0436\u043D\u043E\u0441\u0442\u0438 \u043D\u0435 \u0437\u0430\u043F\u043E\u043B\u043D\u0435\u043D \u0440\u0430\u0431\u043E\u0447\u0438\u0439 \u043D\u043E\u043C\u0435\u0440 \u2014 \u043E\u0431\u0440\u0430\u0442\u0438\u0442\u0435\u0441\u044C \u043A \u0430\u0434\u043C\u0438\u043D\u0438\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0443"
+      error: "\u0423 \u0432\u0430\u0448\u0435\u0439 \u0434\u043E\u043B\u0436\u043D\u043E\u0441\u0442\u0438 \u043D\u0435 \u0437\u0430\u043F\u043E\u043B\u043D\u0435\u043D \u0440\u0430\u0431\u043E\u0447\u0438\u0439 \u043D\u043E\u043C\u0435\u0440 \u2014 \u0443\u043A\u0430\u0436\u0438\u0442\u0435 \u043D\u043E\u043C\u0435\u0440 \u0432\u0440\u0443\u0447\u043D\u0443\u044E"
+    };
+  }
+  const busy = await numberOwner(nomer, check.deviceId);
+  if (busy) {
+    return {
+      ok: false,
+      error: busy === memberId ? "\u042D\u0442\u043E\u0442 \u043D\u043E\u043C\u0435\u0440 \u0443\u0436\u0435 \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0451\u043D \u043D\u0430 \u0434\u0440\u0443\u0433\u043E\u043C \u0443\u0441\u0442\u0440\u043E\u0439\u0441\u0442\u0432\u0435" : "\u042D\u0442\u043E\u0442 \u043D\u043E\u043C\u0435\u0440 \u0443\u0436\u0435 \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0451\u043D \u0434\u0440\u0443\u0433\u0438\u043C \u0441\u043E\u0442\u0440\u0443\u0434\u043D\u0438\u043A\u043E\u043C"
     };
   }
   const existing = rowsOf(
@@ -5628,6 +5636,30 @@ var connectChannel = async (memberId, login, parol) => {
   )[0];
   return { ok: true, gatewayId: String(created?.id ?? ""), created: true, nomer };
 };
+var normalizePhone = (value) => {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("7")) return digits.slice(1);
+  if (digits.length === 11 && digits.startsWith("8")) return digits.slice(1);
+  return digits.length === 10 ? digits : "";
+};
+var phoneOf = (value) => {
+  if (value && typeof value === "object") {
+    return String(value.primaryPhoneNumber ?? "").replace(/\D/g, "");
+  }
+  return String(value ?? "").replace(/\D/g, "");
+};
+var numberOwner = async (nomer, ownDeviceId) => {
+  const rows = rowsOf(
+    await client2.get("/rest/smsGateways", {
+      query: { select: "id,nomer,deviceId,sotrudnikId", limit: 100 }
+    }),
+    "smsGateways"
+  );
+  const taken = rows.find(
+    (row) => phoneOf(row.nomer) === nomer && String(row.deviceId ?? "") !== ownDeviceId
+  );
+  return taken ? String(taken.sotrudnikId ?? "\u0437\u0430\u043D\u044F\u0442") : "";
+};
 
 // src/logic-functions/sms-channel-connect.logic-function.ts
 var handler = async (event, context) => {
@@ -5640,8 +5672,9 @@ var handler = async (event, context) => {
   const body = event.body ?? {};
   const login = String(body.login ?? "").trim();
   const parol = String(body.parol ?? "").trim();
+  const nomer = String(body.nomer ?? "").trim();
   try {
-    const result = await connectChannel(context.workspaceMemberId, login, parol);
+    const result = await connectChannel(context.workspaceMemberId, login, parol, nomer);
     return new ka(JSON.stringify(result), {
       status: result.ok ? 200 : 400,
       headers: { "content-type": "application/json" }
