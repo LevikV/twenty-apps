@@ -14,7 +14,7 @@ import { callRoute } from './chat-api';
 type Channel = {
   id: string;
   name: string;
-  nomer: string | null;
+  nomer: unknown;
   status: string | null;
   deviceId: string | null;
   login: string | null;
@@ -33,10 +33,24 @@ const STATUS_COLOR: Record<string, string> = {
   NET_SVYAZI: '#b42318',
 };
 
-const formatPhone = (value: string | null): string => {
-  const digits = String(value ?? '').replace(/\D/g, '');
+/**
+ * Номер в REST приходит объектом (поле типа «Телефон»): берём основной номер,
+ * строку тоже принимаем — в ответе на подключение приходит уже готовая строка.
+ */
+const phoneDigits = (value: unknown): string => {
+  if (value && typeof value === 'object') {
+    const phone = value as { primaryPhoneNumber?: string | null };
 
-  if (digits.length !== 10) return value || '—';
+    return String(phone.primaryPhoneNumber ?? '').replace(/\D/g, '');
+  }
+
+  return String(value ?? '').replace(/\D/g, '');
+};
+
+const formatPhone = (value: unknown): string => {
+  const digits = phoneDigits(value);
+
+  if (digits.length !== 10) return digits || '—';
 
   return `+7 ${digits.slice(0, 3)} ${digits.slice(3, 6)}-${digits.slice(6, 8)}-${digits.slice(8)}`;
 };
@@ -132,6 +146,8 @@ export const ChannelsPanel = ({ onClose }: { onClose: () => void }) => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  // Инструкция по каждому каналу — отдельной раскрывающейся секцией.
+  const [openChannel, setOpenChannel] = useState<'SMS' | null>('SMS');
 
   const load = useCallback(async () => {
     try {
@@ -166,7 +182,7 @@ export const ChannelsPanel = ({ onClose }: { onClose: () => void }) => {
       if (!result.ok) {
         setError(result.error ?? 'Не удалось подключить');
       } else {
-        setDone(`Телефон подключён. Клиентские SMS пойдут с номера ${formatPhone(result.nomer ?? null)}`);
+        setDone(`Телефон подключён. Клиентские SMS пойдут с номера ${formatPhone(result.nomer)}`);
         setLogin('');
         setParol('');
         await load();
@@ -243,11 +259,95 @@ export const ChannelsPanel = ({ onClose }: { onClose: () => void }) => {
           ))}
         </div>
 
-        <div style={{ ...card, width: '360px', flexShrink: 0 }}>
-          <div style={{ fontSize: '14px', fontWeight: 600, marginBottom: '10px' }}>Подключить телефон</div>
+        <div style={{ ...card, width: '380px', flexShrink: 0 }}>
+          <div style={{ fontSize: '14px', fontWeight: 600, marginBottom: '4px' }}>Подключить канал</div>
+          <div style={{ fontSize: '12px', color: '#888', marginBottom: '10px' }}>
+            У каждого канала своя инструкция и свои данные подключения
+          </div>
 
+          <div style={{ border: '1px solid #e6e6e6', borderRadius: '8px', overflow: 'hidden' }}>
+            <button
+              type="button"
+              onClick={() => setOpenChannel(openChannel === 'SMS' ? null : 'SMS')}
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px',
+                border: 'none',
+                background: '#fafafa',
+                padding: '10px 12px',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+            >
+              <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span
+                  style={{
+                    padding: '1px 6px',
+                    borderRadius: '4px',
+                    background: '#e8f0ff',
+                    color: '#1961ff',
+                    fontSize: '10px',
+                    fontWeight: 700,
+                  }}
+                >
+                  SMS
+                </span>
+                <span style={{ fontSize: '13px', fontWeight: 600, color: '#222' }}>
+                  SIM-карта телефона
+                </span>
+              </span>
+              <span style={{ fontSize: '11px', color: '#888' }}>
+                {openChannel === 'SMS' ? 'свернуть' : 'развернуть'}
+              </span>
+            </button>
+
+            {openChannel === 'SMS' && (
+          <div style={{ padding: '12px' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
-            {step(1, 'Установите приложение «SMS Gateway for Android» и откройте его.')}
+            {step(
+              1,
+              'Установите на телефон приложение «SMS Gateway for Android» — официально оно распространяется файлом APK с GitHub.',
+            )}
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', paddingLeft: '28px' }}>
+              <a
+                href="https://github.com/capcom6/android-sms-gateway/releases/download/v1.78.0/app-release.apk"
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  fontSize: '12px',
+                  color: '#1961ff',
+                  border: '1px solid #cfdcff',
+                  borderRadius: '6px',
+                  padding: '3px 8px',
+                  textDecoration: 'none',
+                }}
+              >
+                Скачать APK
+              </a>
+              <a
+                href="https://github.com/capcom6/android-sms-gateway/releases"
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  fontSize: '12px',
+                  color: '#1961ff',
+                  border: '1px solid #cfdcff',
+                  borderRadius: '6px',
+                  padding: '3px 8px',
+                  textDecoration: 'none',
+                }}
+              >
+                Все версии
+              </a>
+            </div>
+
+            <div style={{ fontSize: '11px', color: '#999', paddingLeft: '28px' }}>
+              В Play Маркете официального приложения нет — проверено.
+            </div>
             {step(2, 'В настройках укажите адрес сервера и токен подключения:')}
           </div>
 
@@ -338,6 +438,9 @@ export const ChannelsPanel = ({ onClose }: { onClose: () => void }) => {
               {done}
             </div>
           )}
+          </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
