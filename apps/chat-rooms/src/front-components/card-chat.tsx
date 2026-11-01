@@ -36,6 +36,37 @@ type MentionSuggestion = {
   subtitle: string;
 };
 
+type ClientMessage = {
+  id: string;
+  text: string | null;
+  createdAt: string;
+  authorName: string;
+  napravlenie?: string | null;
+  statusDostavki?: string | null;
+};
+
+type ClientThreadState = {
+  chatId: string | null;
+  nomer: string | null;
+  reason?: string;
+  messages: ClientMessage[];
+};
+
+const DELIVERY_LABEL: Record<string, { text: string; color: string }> = {
+  OTPRAVLYAETSYA: { text: 'отправляется', color: '#8b8b8b' },
+  OTPRAVLENO: { text: 'отправлено', color: '#8b8b8b' },
+  DOSTAVLENO: { text: 'доставлено', color: '#1a7f37' },
+  OSHIBKA: { text: 'не отправлено', color: '#c03b2c' },
+};
+
+const formatClientPhone = (value: string | null): string => {
+  const digits = String(value ?? '').replace(/\D/g, '');
+
+  if (digits.length !== 10) return '';
+
+  return `+7 ${digits.slice(0, 3)} ${digits.slice(3, 6)}-${digits.slice(6, 8)}-${digits.slice(8)}`;
+};
+
 type RoomState = {
   chatId: string | null;
   name: string;
@@ -131,6 +162,13 @@ export const CardChat = () => {
   const recordId = recordIds.length === 1 ? recordIds[0] : null;
 
   const [room, setRoom] = useState<RoomState | null>(null);
+
+  // Переписка с клиентом — вторая вкладка, только у сделок.
+  const [tab, setTab] = useState<'discussion' | 'client'>('discussion');
+  const [clientThread, setClientThread] = useState<ClientThreadState | null>(null);
+  const [clientDraft, setClientDraft] = useState('');
+  const [clientError, setClientError] = useState<string | null>(null);
+  const [clientSending, setClientSending] = useState(false);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
@@ -178,6 +216,53 @@ export const CardChat = () => {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     }
   }, [recordId]);
+
+  const reloadClient = useCallback(async () => {
+    if (!recordId) return;
+
+    try {
+      const state = await callRoute<ClientThreadState>(
+        `/chat-client-thread?recordId=${encodeURIComponent(recordId)}`,
+      );
+
+      setClientThread(state);
+      setClientError(null);
+    } catch (loadError) {
+      setClientError(loadError instanceof Error ? loadError.message : String(loadError));
+    }
+  }, [recordId]);
+
+  // Клиентскую ленту грузим только когда вкладка открыта: лишних запросов нет.
+  useEffect(() => {
+    if (tab !== 'client') return;
+
+    void reloadClient();
+
+    const timer = setInterval(() => {
+      if (clientDraft.trim().length === 0) void reloadClient();
+    }, 20000);
+
+    return () => clearInterval(timer);
+  }, [tab, reloadClient, clientDraft]);
+
+  const sendToClient = async () => {
+    const text = clientDraft.trim();
+
+    if (!text || !recordId || clientSending) return;
+
+    setClientSending(true);
+    setClientError(null);
+
+    try {
+      await callRoute('/chat-client-send', { method: 'POST', body: { recordId, text } });
+      setClientDraft('');
+      await reloadClient();
+    } catch (sendError) {
+      setClientError(sendError instanceof Error ? sendError.message : String(sendError));
+    } finally {
+      setClientSending(false);
+    }
+  };
 
   useEffect(() => {
     void reload();
@@ -441,6 +526,175 @@ export const CardChat = () => {
     );
   }
 
+  const isDeal = room?.tip === 'SDELKA';
+
+  const tabSwitcher = isDeal ? (
+    <div style={{ display: 'flex', gap: '4px', borderBottom: '1px solid #e8e8ea', paddingBottom: '6px' }}>
+      {([
+        ['discussion', 'Обсуждение'],
+        ['client', 'Клиент'],
+      ] as const).map(([key, label]) => (
+        <button
+          key={key}
+          type="button"
+          onClick={() => setTab(key)}
+          style={{
+            border: 'none',
+            borderRadius: '6px',
+            padding: '5px 10px',
+            fontSize: '12px',
+            fontWeight: tab === key ? 600 : 400,
+            color: tab === key ? '#1a1a1a' : '#8b8b8b',
+            background: tab === key ? '#eef3ff' : 'transparent',
+            cursor: 'pointer',
+          }}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
+  if (isDeal && tab === 'client') {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+          height: '420px',
+          minHeight: 0,
+          boxSizing: 'border-box',
+          overflow: 'hidden',
+          fontFamily: 'Inter, sans-serif',
+          color: '#1a1a1a',
+        }}
+      >
+        {tabSwitcher}
+
+        {clientError && (
+          <div style={{ background: '#fdecec', border: '1px solid #f3c2c2', borderRadius: '6px', padding: '6px 8px', fontSize: '12px', color: '#a83232' }}>
+            {clientError}
+          </div>
+        )}
+
+        {clientThread && !clientThread.chatId && (
+          <div style={{ fontSize: '13px', color: '#8b8b8b', padding: '8px 0' }}>
+            {clientThread.reason ?? 'Переписки с клиентом ещё нет'}
+          </div>
+        )}
+
+        {clientThread?.chatId && (
+          <>
+            <div style={{ fontSize: '11px', color: '#8b8b8b' }}>
+              SMS{clientThread.nomer ? ` · ${formatClientPhone(clientThread.nomer)}` : ''}
+            </div>
+
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflowY: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+                padding: '2px',
+              }}
+            >
+              {clientThread.messages.length === 0 && (
+                <div style={{ fontSize: '13px', color: '#8b8b8b', padding: '8px 0' }}>
+                  Сообщений пока нет.
+                </div>
+              )}
+
+              {clientThread.messages.map((message) => {
+                const mine = message.napravlenie === 'ISHODYASHCHIE';
+
+                return (
+                  <div
+                    key={message.id}
+                    style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', gap: '2px' }}
+                  >
+                    <div style={{ fontSize: '11px', color: '#8b8b8b' }}>
+                      {mine ? 'Вы' : 'Клиент'} · {formatTime(message.createdAt)}
+                    </div>
+                    <div
+                      style={{
+                        maxWidth: '85%',
+                        background: mine ? '#1961ff' : '#f5f6f8',
+                        color: mine ? '#fff' : '#1a1a1a',
+                        borderRadius: '8px',
+                        padding: '7px 10px',
+                        fontSize: '13px',
+                        lineHeight: '18px',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      {message.text}
+                    </div>
+
+                    {mine && message.statusDostavki && (
+                      <div
+                        style={{
+                          fontSize: '10px',
+                          color: DELIVERY_LABEL[message.statusDostavki]?.color ?? '#8b8b8b',
+                        }}
+                      >
+                        {DELIVERY_LABEL[message.statusDostavki]?.text ?? message.statusDostavki}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <textarea
+                value={clientDraft}
+                onChange={(event) => setClientDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    void sendToClient();
+                  }
+                }}
+                placeholder="Ответить клиенту…"
+                rows={2}
+                style={{
+                  flex: 1,
+                  resize: 'none',
+                  border: '1px solid #d6d6d6',
+                  borderRadius: '6px',
+                  padding: '7px 10px',
+                  fontSize: '13px',
+                  fontFamily: 'inherit',
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => void sendToClient()}
+                disabled={clientSending || !clientDraft.trim()}
+                style={{
+                  border: 'none',
+                  borderRadius: '6px',
+                  background: clientSending || !clientDraft.trim() ? '#9bb8ff' : '#1961ff',
+                  color: '#fff',
+                  padding: '0 14px',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  cursor: clientSending || !clientDraft.trim() ? 'default' : 'pointer',
+                }}
+              >
+                Отправить
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
   const popupOpen = mentionQuery !== null && suggestions.length > 0;
 
   return (
@@ -458,6 +712,8 @@ export const CardChat = () => {
         color: '#1a1a1a',
       }}
     >
+      {tabSwitcher}
+
       {error && (
         <div style={{ background: '#fdecec', border: '1px solid #f3c2c2', borderRadius: '6px', padding: '6px 8px', fontSize: '12px', color: '#a83232' }}>
           {error}

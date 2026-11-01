@@ -60,8 +60,4 @@ export const CHAT_CLIENT_THREAD_FUNCTION_UNIVERSAL_IDENTIFIER =
 export const CHAT_CLIENT_SEND_FUNCTION_UNIVERSAL_IDENTIFIER =
   '04db391c-c9bb-4a23-900e-ec0d8d9dc8d5';
 
-/** Переписка с клиентом в карточке сделки (фронт-компонент). */
-export const CARD_CLIENT_CHAT_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
-  '37c00d48-f9f2-46c3-ae3d-4bf92b8ad5bd';
-
 
