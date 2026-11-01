@@ -42,6 +42,16 @@ type Message = {
   authorId: string | null;
   authorName: string;
   mentions?: MentionView[];
+  napravlenie?: string | null;
+  statusDostavki?: string | null;
+};
+
+/** Подпись статуса доставки под исходящим сообщением канала связи. */
+const DELIVERY_LABEL: Record<string, { text: string; color: string }> = {
+  OTPRAVLYAETSYA: { text: 'отправляется', color: '#999' },
+  OTPRAVLENO: { text: 'отправлено', color: '#999' },
+  DOSTAVLENO: { text: 'доставлено', color: '#1a7f37' },
+  OSHIBKA: { text: 'не отправлено', color: '#c03b2c' },
 };
 
 type DialogsResponse = {
@@ -1152,6 +1162,19 @@ const ChatCenter = () => {
                       >
                         {renderMentions(message.text, message.mentions)}
                       </div>
+
+                      {message.napravlenie === 'ISHODYASHCHIE' && message.statusDostavki && (
+                        <div
+                          style={{
+                            fontSize: '10px',
+                            color: DELIVERY_LABEL[message.statusDostavki]?.color ?? '#999',
+                            textAlign: 'right',
+                            marginTop: '2px',
+                          }}
+                        >
+                          {DELIVERY_LABEL[message.statusDostavki]?.text ?? message.statusDostavki}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );

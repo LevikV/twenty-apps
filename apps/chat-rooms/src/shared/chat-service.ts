@@ -40,6 +40,9 @@ export type MessageView = {
   authorId: string | null;
   authorName: string;
   mentions: MentionView[];
+  /** Направление и статус доставки — есть только у сообщений каналов связи. */
+  napravlenie: string | null;
+  statusDostavki: string | null;
 };
 
 /** Смотрел ли сотрудник диалог в последние секунды (отметка «прочитано» свежая). */
@@ -300,7 +303,7 @@ export class ChatService {
     const response = await this.client.get<unknown>('/rest/soobshcheniya', {
       query: {
         filter: `chatId[eq]:"${chatId}"`,
-        select: 'id,tekst,createdAt,avtorId,chatId',
+        select: 'id,tekst,createdAt,avtorId,chatId,napravlenie,statusDostavki',
         limit: 60,
       },
     });
@@ -321,6 +324,8 @@ export class ChatService {
           authorId,
           authorName: authorId ? names[authorId] ?? 'Сотрудник' : 'Сотрудник',
           mentions: mentionMap.get(id) ?? [],
+          napravlenie: asString(message.napravlenie),
+          statusDostavki: asString(message.statusDostavki),
         };
       })
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
