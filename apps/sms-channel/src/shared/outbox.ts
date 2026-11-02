@@ -196,6 +196,25 @@ export const patchMessage = async (
   await client.patch<unknown>(`/rest/soobshcheniya/${messageId}`, patch);
 };
 
+/**
+ * Задачи, которые могут зависнуть: отправленные без финального статуса и
+ * ожидающие с просроченной попыткой.
+ */
+export const staleTasks = async (): Promise<QueueTask[]> => {
+  const rows = rowsOf(
+    await client.get<unknown>('/rest/smsOutboxTasks', {
+      query: {
+        filter: 'status[in]:["OTPRAVLENO","ZHDET"]',
+        select: 'id,status,popytki,shlyuzId,soobshchenieId,vneshniyId,sledyushchayaPopytka,createdAt,updatedAt',
+        limit: 100,
+      },
+    }),
+    'smsOutboxTasks',
+  );
+
+  return rows as QueueTask[];
+};
+
 export const overLimit = async (task: QueueTask, auth: GatewayAuth): Promise<boolean> => {
   if (auth.limit <= 0 || !task.shlyuzId) return false;
 

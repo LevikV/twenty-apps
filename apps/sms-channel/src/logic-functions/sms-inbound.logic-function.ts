@@ -16,6 +16,7 @@ import {
   touchGateway,
 } from 'src/shared/crm';
 import { notifyIncoming } from 'src/shared/notify';
+import { verifyWebhookSignature, webhookSecret } from 'src/shared/signature';
 import { formatPhone, parseIncoming } from 'src/shared/sms';
 
 /**
@@ -29,6 +30,21 @@ import { formatPhone, parseIncoming } from 'src/shared/sms';
  * вебхука вернёт `duplicate: true` и ничего не задвоит.
  */
 const handler = async (event: RoutePayload) => {
+  // Подпись проверяем, только если ключ задан в окружении: иначе тестовый контур
+  // встал бы, а ключ задаётся на телефоне вручную.
+  const signature = verifyWebhookSignature(
+    String(event.rawBody ?? ''),
+    event.headers ?? {},
+    webhookSecret(),
+  );
+
+  if (!signature.ok) {
+    return new Response(JSON.stringify({ ok: false, error: signature.reason }), {
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
   const incoming = parseIncoming(event.body, event.headers ?? {});
   const errors: string[] = [];
 
