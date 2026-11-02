@@ -45,10 +45,27 @@ type ClientMessage = {
   statusDostavki?: string | null;
 };
 
+type ClientContact = {
+  personId: string;
+  name: string;
+  phone: string;
+  isPoint: boolean;
+};
+
+type ClientChannel = {
+  id: string;
+  name: string;
+  nomer: string;
+  deviceId: string;
+};
+
 type ClientThreadState = {
   chatId: string | null;
   nomer: string | null;
   reason?: string;
+  dealName?: string;
+  contacts: ClientContact[];
+  channels: ClientChannel[];
   messages: ClientMessage[];
 };
 
@@ -168,6 +185,8 @@ export const CardChat = () => {
   const [clientThread, setClientThread] = useState<ClientThreadState | null>(null);
   const [clientDraft, setClientDraft] = useState('');
   const [clientError, setClientError] = useState<string | null>(null);
+  const [clientPersonId, setClientPersonId] = useState('');
+  const [clientChannelId, setClientChannelId] = useState('');
   const [clientSending, setClientSending] = useState(false);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -227,6 +246,8 @@ export const CardChat = () => {
 
       setClientThread(state);
       setClientError(null);
+      setClientPersonId((current) => current || state.contacts?.[0]?.personId || '');
+      setClientChannelId((current) => current || state.channels?.[0]?.id || '');
     } catch (loadError) {
       setClientError(loadError instanceof Error ? loadError.message : String(loadError));
     }
@@ -254,7 +275,15 @@ export const CardChat = () => {
     setClientError(null);
 
     try {
-      await callRoute('/chat-client-send', { method: 'POST', body: { recordId, text } });
+      await callRoute('/chat-client-send', {
+        method: 'POST',
+        body: {
+          recordId,
+          text,
+          personId: clientPersonId || undefined,
+          channelId: clientChannelId || undefined,
+        },
+      });
       setClientDraft('');
       await reloadClient();
     } catch (sendError) {
@@ -578,16 +607,48 @@ export const CardChat = () => {
           </div>
         )}
 
-        {clientThread && !clientThread.chatId && (
+        {clientThread && clientThread.contacts.length === 0 && (
           <div style={{ fontSize: '13px', color: '#8b8b8b', padding: '8px 0' }}>
-            {clientThread.reason ?? 'Переписки с клиентом ещё нет'}
+            {clientThread.reason ?? 'у сделки нет покупателя с телефоном'}
           </div>
         )}
 
-        {clientThread?.chatId && (
+        {clientThread && clientThread.contacts.length > 0 && (
           <>
-            <div style={{ fontSize: '11px', color: '#8b8b8b' }}>
-              SMS{clientThread.nomer ? ` · ${formatClientPhone(clientThread.nomer)}` : ''}
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '11px', color: '#8b8b8b', flexWrap: 'wrap' }}>
+              <span>SMS</span>
+
+              {clientThread.contacts.length > 1 ? (
+                <select
+                  value={clientPersonId}
+                  onChange={(event) => setClientPersonId(event.target.value)}
+                  style={{ fontSize: '11px', padding: '2px 4px', borderRadius: '4px', border: '1px solid #d6d6d6' }}
+                >
+                  {clientThread.contacts.map((contact) => (
+                    <option key={contact.personId} value={contact.personId}>
+                      {contact.name} · {formatClientPhone(contact.phone)}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span>
+                  {clientThread.contacts[0].name} · {formatClientPhone(clientThread.contacts[0].phone)}
+                </span>
+              )}
+
+              {clientThread.channels.length > 1 && (
+                <select
+                  value={clientChannelId}
+                  onChange={(event) => setClientChannelId(event.target.value)}
+                  style={{ fontSize: '11px', padding: '2px 4px', borderRadius: '4px', border: '1px solid #d6d6d6' }}
+                >
+                  {clientThread.channels.map((channel) => (
+                    <option key={channel.id} value={channel.id}>
+                      {channel.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
 
             <div
@@ -616,7 +677,7 @@ export const CardChat = () => {
                     style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', gap: '2px' }}
                   >
                     <div style={{ fontSize: '11px', color: '#8b8b8b' }}>
-                      {mine ? 'Вы' : 'Клиент'} · {formatTime(message.createdAt)}
+                      {mine ? 'Вы' : message.authorName} · {formatTime(message.createdAt)}
                     </div>
                     <div
                       style={{

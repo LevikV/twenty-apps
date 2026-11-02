@@ -11,6 +11,7 @@ import { Button, IconButton, SearchInput } from 'twenty-ui/input';
 import { useTheme } from 'twenty-ui/theme-constants';
 
 import { RELATION_CARDS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
+import { callRoute } from './api';
 
 /**
  * Контактные лица контрагента.
@@ -186,58 +187,6 @@ const splitSearchTermIntoName = (
   return { firstName: parts.slice(1).join(' '), lastName: parts[0] };
 };
 
-const LINK_SELECT =
-  'id,name,dolzhnost,objectGuid,klientCompanyId,klientPersonId,kontaktnoeLicoId';
-
-const fetchLinks = async (
-  api: RestApiClient,
-  filter: string,
-): Promise<LinkRecord[]> => {
-  const response = await api.get<LinksResponse>('/rest/kontaktyKlientov', {
-    query: { filter, limit: LIMIT, select: LINK_SELECT },
-  });
-
-  return response?.data?.kontaktyKlientov ?? [];
-};
-
-const fetchPeople = async (
-  api: RestApiClient,
-  ids: string[],
-): Promise<PersonLite[]> => {
-  if (ids.length === 0) {
-    return [];
-  }
-
-  const response = await api.get<PeopleResponse>('/rest/people', {
-    query: {
-      filter: `id[in]:[${ids.join(',')}]`,
-      limit: LIMIT,
-      select: 'id,name,phones,jobTitle',
-    },
-  });
-
-  return response?.data?.people ?? [];
-};
-
-const fetchCompanyNames = async (
-  api: RestApiClient,
-  ids: string[],
-): Promise<Array<{ id: string; name?: string | null }>> => {
-  if (ids.length === 0) {
-    return [];
-  }
-
-  const response = await api.get<CompaniesResponse>('/rest/companies', {
-    query: {
-      filter: `id[in]:[${ids.join(',')}]`,
-      limit: LIMIT,
-      select: 'id,name',
-    },
-  });
-
-  return response?.data?.companies ?? [];
-};
-
 const ContactPersons = () => {
   const theme = useTheme();
   const [recordId] = useSelectedRecordIds();
@@ -297,80 +246,21 @@ const ContactPersons = () => {
     setErrorMessage(null);
 
     try {
-      const api = new RestApiClient();
+      // Читаем через маршрут приложения: роль пользователя может не иметь
+      // доступа к служебному объекту связей, а контактные лица видеть должна.
+      const data = await callRoute<{
+        isCompany: boolean;
+        links: LinkRecord[];
+        usage: LinkRecord[];
+        persons: Record<string, PersonLite>;
+        ownerNames: Record<string, string>;
+      }>(`/relation-cards-data?recordId=${encodeURIComponent(recordId)}`);
 
-      const companyResponse = await api.get<CompaniesResponse>(
-        '/rest/companies',
-        {
-          query: { filter: `id[eq]:${recordId}`, limit: 1, select: 'id,name' },
-        },
-      );
-
-      const isCompany = (companyResponse?.data?.companies ?? []).length > 0;
-
-      let ownLinks: LinkRecord[] = [];
-      let usageLinks: LinkRecord[] = [];
-
-      if (isCompany) {
-        ownLinks = await fetchLinks(api, `klientCompanyId[eq]:${recordId}`);
-      } else {
-        ownLinks = await fetchLinks(api, `klientPersonId[eq]:${recordId}`);
-        usageLinks = await fetchLinks(api, `kontaktnoeLicoId[eq]:${recordId}`);
-      }
-
-      const allLinks = [...ownLinks, ...usageLinks];
-
-      const personIds = Array.from(
-        new Set(
-          allLinks
-            .map((link) => String(link.kontaktnoeLicoId ?? ''))
-            .filter(Boolean),
-        ),
-      );
-
-      const ownerPersonIds = Array.from(
-        new Set(
-          allLinks
-            .map((link) => String(link.klientPersonId ?? ''))
-            .filter(Boolean),
-        ),
-      );
-
-      const ownerCompanyIds = Array.from(
-        new Set(
-          allLinks
-            .map((link) => String(link.klientCompanyId ?? ''))
-            .filter(Boolean),
-        ),
-      );
-
-      const [personRows, ownerPersonRows, ownerCompanyRows] = await Promise.all([
-        fetchPeople(api, [...personIds, ...ownerPersonIds]),
-        fetchPeople(api, ownerPersonIds),
-        fetchCompanyNames(api, ownerCompanyIds),
-      ]);
-
-      const personMap: Record<string, PersonLite> = {};
-
-      for (const person of [...personRows, ...ownerPersonRows]) {
-        personMap[person.id] = person;
-      }
-
-      const ownerMap: Record<string, string> = {};
-
-      for (const person of ownerPersonRows) {
-        ownerMap[person.id] = getPersonName(person);
-      }
-
-      for (const company of ownerCompanyRows) {
-        ownerMap[company.id] = String(company.name ?? '').trim() || 'Без названия';
-      }
-
-      setMode(isCompany ? 'company' : 'person');
-      setLinks(ownLinks);
-      setUsage(usageLinks);
-      setPersons(personMap);
-      setOwnerNames(ownerMap);
+      setMode(data.isCompany ? 'company' : 'person');
+      setLinks(data.links ?? []);
+      setUsage(data.usage ?? []);
+      setPersons(data.persons ?? {});
+      setOwnerNames(data.ownerNames ?? {});
     } catch (error) {
       console.error('contact-persons: load failed', error);
       setErrorMessage('Не удалось загрузить контактные лица');
@@ -499,12 +389,10 @@ const ContactPersons = () => {
         return;
       }
 
-      const body =
-        mode === 'company'
-          ? { klientCompanyId: recordId, kontaktnoeLicoId: personId }
-          : { klientPersonId: recordId, kontaktnoeLicoId: personId };
-
-      await new RestApiClient().post('/rest/kontaktyKlientov', body);
+      await callRoute('/relation-cards-add', {
+        method: 'POST',
+        body: { mode, recordId, personId },
+      });
       await loadAll();
     },
     [loadAll, mode, recordId],
@@ -524,9 +412,9 @@ const ContactPersons = () => {
             return;
           }
 
-          await new RestApiClient().post('/rest/kontaktyKlientov', {
-            klientCompanyId: id,
-            kontaktnoeLicoId: recordId,
+          await callRoute('/relation-cards-add', {
+            method: 'POST',
+            body: { companyId: id, personId: recordId },
           });
 
           await loadAll();
@@ -570,7 +458,10 @@ const ContactPersons = () => {
       setPendingIds((previous) => [...previous, link.id]);
 
       try {
-        await new RestApiClient().delete(`/rest/kontaktyKlientov/${link.id}`);
+        await callRoute('/relation-cards-remove', {
+          method: 'POST',
+          body: { linkId: link.id },
+        });
         await loadAll();
 
         await enqueueSnackbar({
@@ -605,19 +496,16 @@ const ContactPersons = () => {
     setIsCreating(true);
 
     try {
-      const response = await new RestApiClient().post<CreatePersonResponse>(
-        '/rest/people',
-        {
-          name: { firstName, lastName },
-          ...(phone ? { phones: { primaryPhoneNumber: phone } } : {}),
+      const created = await callRoute<{ personId?: string }>('/relation-cards-add', {
+        method: 'POST',
+        body: {
+          mode,
+          recordId,
+          newPerson: { firstName, lastName, phone },
         },
-      );
+      });
 
-      const created = response?.data?.createPerson;
-
-      if (created?.id) {
-        await addContactLink(created.id);
-      } else {
+      if (!created?.personId) {
         await loadAll();
       }
 

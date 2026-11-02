@@ -6,8 +6,8 @@ import {
 } from 'twenty-sdk/logic-function';
 
 import { CHAT_CLIENT_THREAD_FUNCTION_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
-import { threadOfDeal } from 'src/shared/client-thread';
-import { ChatService, describeError } from 'src/shared/chat-service';
+import { messagesOfDeal, threadOfDeal } from 'src/shared/client-thread';
+import { describeError } from 'src/shared/chat-service';
 
 /**
  * Переписка с клиентом для карточки сделки.
@@ -33,10 +33,9 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
   }
 
   try {
-    const thread = await threadOfDeal(recordId);
-    const messages = thread.chatId
-      ? (await new ChatService().messagesByChat(thread.chatId)).messages
-      : [];
+    const thread = await threadOfDeal(recordId, context.workspaceMemberId);
+    // Лента сделки: только сообщения, привязанные к ней, от всех контактов покупателя.
+    const messages = await messagesOfDeal(thread.targetIds, thread.contacts);
 
     return new Response(JSON.stringify({ ...thread, messages }), {
       status: 200,
