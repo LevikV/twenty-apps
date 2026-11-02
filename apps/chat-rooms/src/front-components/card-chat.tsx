@@ -79,9 +79,12 @@ const DELIVERY_LABEL: Record<string, { text: string; color: string }> = {
 const formatClientPhone = (value: string | null): string => {
   const digits = String(value ?? '').replace(/\D/g, '');
 
-  if (digits.length !== 10) return '';
+  // Номер может прийти с кодом страны или без него.
+  const national = digits.length === 11 && digits.startsWith('7') ? digits.slice(1) : digits;
 
-  return `+7 ${digits.slice(0, 3)} ${digits.slice(3, 6)}-${digits.slice(6, 8)}-${digits.slice(8)}`;
+  if (national.length !== 10) return '';
+
+  return `+7 ${national.slice(0, 3)} ${national.slice(3, 6)}-${national.slice(6, 8)}-${national.slice(8)}`;
 };
 
 type RoomState = {

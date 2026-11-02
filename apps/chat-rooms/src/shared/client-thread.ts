@@ -55,17 +55,34 @@ const firstRow = (body: unknown): Row | undefined => {
   return undefined;
 };
 
-/** Номер в виде строки: `+7 924 123-45-67`. */
+/**
+ * Номер в виде строки: `+7 924 123-45-67`.
+ *
+ * REST отдаёт телефоны объектом (`phones.primaryPhoneNumber`), а фильтры и
+ * выгрузки — плоскими полями. Поддерживаем оба вида.
+ */
 export const formatPhone = (row: Row | undefined): string => {
   if (!row) return '';
 
-  const number = String(row.phonesPrimaryPhoneNumber ?? '').replace(/\D/g, '');
+  const phones = (row.phones ?? {}) as {
+    primaryPhoneNumber?: string;
+    primaryPhoneCallingCode?: string;
+  };
+
+  const number = String(phones.primaryPhoneNumber ?? row.phonesPrimaryPhoneNumber ?? '').replace(
+    /\D/g,
+    '',
+  );
 
   if (!number) return '';
 
-  const code = String(row.phonesPrimaryPhoneCallingCode ?? '+7');
+  const code = String(
+    phones.primaryPhoneCallingCode ?? row.phonesPrimaryPhoneCallingCode ?? '+7',
+  );
 
-  return `${code} ${number.slice(0, 3)} ${number.slice(3, 6)}-${number.slice(6, 8)}-${number.slice(8, 10)}`.trim();
+  const national = number.length === 11 ? number.slice(1) : number;
+
+  return `${code} ${national.slice(0, 3)} ${national.slice(3, 6)}-${national.slice(6, 8)}-${national.slice(8, 10)}`.trim();
 };
 
 const personName = (row: Row | undefined): string => {
@@ -269,9 +286,7 @@ export const channelsOfMember = async (memberId: string): Promise<ClientChannel[
     .map((row) => ({
       id: String(row.id ?? ''),
       name: String(row.name ?? row.nomerPrimaryPhoneNumber ?? 'Канал'),
-      nomer: formatPhone({
-        phonesPrimaryPhoneNumber: row.nomerPrimaryPhoneNumber,
-      }),
+      nomer: formatPhone({ phones: { primaryPhoneNumber: row.nomerPrimaryPhoneNumber } }),
       deviceId: String(row.deviceId ?? ''),
     }));
 
@@ -295,7 +310,7 @@ export const channelsOfMember = async (memberId: string): Promise<ClientChannel[
     .map((row) => ({
       id: String(row.id ?? ''),
       name: String(row.name ?? row.nomerPrimaryPhoneNumber ?? 'Канал'),
-      nomer: formatPhone({ phonesPrimaryPhoneNumber: row.nomerPrimaryPhoneNumber }),
+      nomer: formatPhone({ phones: { primaryPhoneNumber: row.nomerPrimaryPhoneNumber } }),
       deviceId: String(row.deviceId ?? ''),
     }));
 };
@@ -309,7 +324,11 @@ export const ensureChatForContact = async (params: {
 }): Promise<string> => {
   const { contact, channel, dealName, companyId } = params;
 
-  const externalId = `sms:${channel.deviceId}:${contact.phone.replace(/\D/g, '')}`;
+  // Ключ диалога совпадает с входящими SMS: 10 цифр без кода страны.
+  const digits = contact.phone.replace(/\D/g, '');
+  const national = digits.length === 11 ? digits.slice(1) : digits;
+
+  const externalId = `sms:${channel.deviceId}:${national}`;
 
   const existing = rowsOf(
     await client.get<unknown>('/rest/chats', {
