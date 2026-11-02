@@ -51,6 +51,8 @@ export const notifyIncoming = async (params: {
 
   const body = {
     userId,
+    // chatId позволяет виджету сразу перечитать ленту, а не ждать таймера.
+    chatId,
     title,
     text: text.slice(0, 140),
     variant: 'info',
