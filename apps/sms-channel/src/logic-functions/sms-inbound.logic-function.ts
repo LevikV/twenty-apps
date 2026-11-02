@@ -16,7 +16,7 @@ import {
   touchGateway,
 } from 'src/shared/crm';
 import { notifyIncoming } from 'src/shared/notify';
-import { verifyWebhookSignature, webhookSecret } from 'src/shared/signature';
+import { verifyRouteSecret, verifyWebhookSignature, webhookSecret } from 'src/shared/signature';
 import { formatPhone, parseIncoming } from 'src/shared/sms';
 
 /**
@@ -32,6 +32,18 @@ import { formatPhone, parseIncoming } from 'src/shared/sms';
 const handler = async (event: RoutePayload) => {
   // Подпись проверяем, только если ключ задан в окружении: иначе тестовый контур
   // встал бы, а ключ задаётся на телефоне вручную.
+  const secretCheck = verifyRouteSecret(
+    event.queryStringParameters,
+    String(process.env.SMS_INBOUND_SECRET ?? ''),
+  );
+
+  if (!secretCheck.ok) {
+    return new Response(JSON.stringify({ ok: false, error: secretCheck.reason }), {
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
   const signature = verifyWebhookSignature(
     String(event.rawBody ?? ''),
     event.headers ?? {},

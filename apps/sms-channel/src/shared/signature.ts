@@ -44,3 +44,33 @@ export const verifyWebhookSignature = (
 
   return { ok: false, reason: 'подпись не совпала' };
 };
+
+/**
+ * Секрет в адресе вебхука (`?k=...`).
+ *
+ * Приложение не во всех сборках даёт задать ключ подписи, поэтому маршрут
+ * можно закрыть секретом в URL: адрес вебхука регистрируется на сервере шлюза
+ * и подхватывается телефоном автоматически, руками ничего настраивать не нужно.
+ */
+export const verifyRouteSecret = (
+  query: Record<string, string | undefined> | undefined,
+  secret: string,
+): SignatureCheck => {
+  if (!secret) return { ok: true };
+
+  const provided = String(query?.k ?? '');
+
+  if (!provided) return { ok: false, reason: 'нет секрета в адресе' };
+
+  // Сравнение постоянного времени: длина и содержимое не утекают по таймингу.
+  const a = Buffer.from(provided);
+  const b = Buffer.from(secret);
+
+  if (a.length !== b.length) return { ok: false, reason: 'неверный секрет в адресе' };
+
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) diff |= a[i]! ^ b[i]!;
+
+  return diff === 0 ? { ok: true } : { ok: false, reason: 'неверный секрет в адресе' };
+};
+
