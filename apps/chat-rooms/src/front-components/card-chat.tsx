@@ -43,6 +43,20 @@ type ClientMessage = {
   authorName: string;
   napravlenie?: string | null;
   statusDostavki?: string | null;
+  personId?: string;
+};
+
+/** Цвета собеседников: у каждого контакта свой, чтобы лента читалась с листа. */
+const CONTACT_COLORS = ['#e8f0fe', '#eaf7ef', '#fff3e0', '#f3e8fd', '#e6f7f7', '#fde8ef'];
+
+const contactColor = (personId: string): string => {
+  let hash = 0;
+
+  for (let index = 0; index < personId.length; index += 1) {
+    hash = (hash * 31 + personId.charCodeAt(index)) % 997;
+  }
+
+  return CONTACT_COLORS[hash % CONTACT_COLORS.length];
 };
 
 type ClientContact = {
@@ -189,6 +203,7 @@ export const CardChat = () => {
   const [clientDraft, setClientDraft] = useState('');
   const [clientError, setClientError] = useState<string | null>(null);
   const [clientPersonId, setClientPersonId] = useState('');
+  const clientListRef = useRef<HTMLDivElement | null>(null);
   const [clientChannelId, setClientChannelId] = useState('');
   const [clientSending, setClientSending] = useState(false);
   const [draft, setDraft] = useState('');
@@ -247,7 +262,11 @@ export const CardChat = () => {
         `/chat-client-thread?recordId=${encodeURIComponent(recordId)}`,
       );
 
-      setClientThread(state);
+      const sortedMessages = [...(state.messages ?? [])].sort(
+        (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
+      );
+
+      setClientThread({ ...state, messages: sortedMessages });
       setClientError(null);
       setClientPersonId((current) => current || state.contacts?.[0]?.personId || '');
       setClientChannelId((current) => current || state.channels?.[0]?.id || '');
@@ -295,6 +314,15 @@ export const CardChat = () => {
       setClientSending(false);
     }
   };
+
+  // Лента клиента всегда открывается на последнем сообщении.
+  useEffect(() => {
+    const node = clientListRef.current;
+
+    if (node) {
+      node.scrollTop = node.scrollHeight;
+    }
+  }, [clientThread?.messages.length, clientThread?.chatId, tab]);
 
   useEffect(() => {
     void reload();
@@ -655,6 +683,7 @@ export const CardChat = () => {
             </div>
 
             <div
+              ref={clientListRef}
               style={{
                 flex: 1,
                 minHeight: 0,
@@ -673,6 +702,7 @@ export const CardChat = () => {
 
               {clientThread.messages.map((message) => {
                 const mine = message.napravlenie === 'ISHODYASHCHIE';
+                const bubble = mine ? '#1961ff' : contactColor(message.personId ?? '');
 
                 return (
                   <div
@@ -685,7 +715,7 @@ export const CardChat = () => {
                     <div
                       style={{
                         maxWidth: '85%',
-                        background: mine ? '#1961ff' : '#f5f6f8',
+                        background: bubble,
                         color: mine ? '#fff' : '#1a1a1a',
                         borderRadius: '8px',
                         padding: '7px 10px',

@@ -409,6 +409,7 @@ export type ClientMessage = {
   napravlenie: string;
   statusDostavki: string;
   chatId: string;
+  personId: string;
   authorName: string;
 };
 
@@ -435,6 +436,7 @@ export const messagesOfDeal = async (
 
   const nameByPerson = new Map(contacts.map((item) => [item.personId, item.name]));
   const nameByChat = new Map<string, string>();
+  const personByChat = new Map<string, string>();
 
   if (chatIds.length > 0) {
     const chats = rowsOf(
@@ -451,10 +453,8 @@ export const messagesOfDeal = async (
     for (const chat of chats) {
       const personId = String(chat.kontaktId ?? '');
 
-      nameByChat.set(
-        String(chat.id ?? ''),
-        nameByPerson.get(personId) ?? 'Клиент',
-      );
+      nameByChat.set(String(chat.id ?? ''), nameByPerson.get(personId) ?? 'Клиент');
+      personByChat.set(String(chat.id ?? ''), personId);
     }
   }
 
@@ -465,6 +465,7 @@ export const messagesOfDeal = async (
     napravlenie: String(row.napravlenie ?? ''),
     statusDostavki: String(row.statusDostavki ?? ''),
     chatId: String(row.chatId ?? ''),
+    personId: personByChat.get(String(row.chatId ?? '')) ?? '',
     authorName: nameByChat.get(String(row.chatId ?? '')) ?? 'Клиент',
   }));
 };

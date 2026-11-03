@@ -144,16 +144,44 @@ export class RecordRoomService {
     );
   }
 
+  /**
+   * Комната обсуждения записи.
+   *
+   * К сделке привязаны и служебные комнаты, и клиентские диалоги (канал SMS).
+   * Обсуждение ведётся только во внутренней комнате, клиентские диалоги в него
+   * не подмешиваются.
+   */
   private async roomIdFor(kind: RecordKind, recordId: string): Promise<string | null> {
     const response = await this.client.get<unknown>('/rest/chatTargets', {
       query: {
         filter: `${kind.targetFieldName}Id[eq]:"${recordId}"`,
         select: 'id,chatId',
-        limit: 1,
+        orderBy: 'createdAt',
+        limit: 20,
       },
     });
 
-    return asString(rowsOf(response, 'chatTargets')[0]?.chatId);
+    const chatIds = rowsOf(response, 'chatTargets')
+      .map((row) => asString(row.chatId))
+      .filter(Boolean);
+
+    if (chatIds.length === 0) return null;
+
+    const chats = rowsOf(
+      await this.client.get<unknown>('/rest/chats', {
+        query: {
+          filter: `id[in]:[${chatIds.join(',')}]`,
+          select: 'id,tip',
+          limit: 20,
+        },
+      }),
+      'chats',
+    );
+
+    const internal = chats.find((row) => asString(row.tip) !== 'KLIENT');
+
+    // Нет внутренней комнаты — обсуждения ещё нет; клиентский диалог не подставляем.
+    return asString(internal?.id) || null;
   }
 
   async describe(recordId: string, memberId: string): Promise<{
