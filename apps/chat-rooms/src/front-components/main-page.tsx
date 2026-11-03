@@ -46,7 +46,7 @@ type Message = {
   mentions?: MentionView[];
   napravlenie?: string | null;
   statusDostavki?: string | null;
-  svyazkaId?: string | null;
+  svyazkaIds?: string[];
 };
 
 const formatChannelPhone = (value: string | null): string => {
@@ -741,7 +741,9 @@ const ChatCenter = () => {
   }, [activeChatId, activeChat?.tip]);
 
   const visibleMessages =
-    dealFilter === 'all' ? messages : messages.filter((message) => message.svyazkaId === dealFilter);
+    dealFilter === 'all'
+      ? messages
+      : messages.filter((message) => (message.svyazkaIds ?? []).includes(dealFilter));
 
   // Открыли чат сделки по ссылке из уведомления — показываем полный список,
   // иначе выбранного диалога не видно в колонке.

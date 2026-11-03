@@ -230,11 +230,17 @@ export const saveIncoming = async (params: {
     vneshniyId: externalId,
   };
 
-  if (svyazkaId) payload.svyazkaId = svyazkaId;
-
   const created = pickCreated(await client.post<unknown>('/rest/soobshcheniya', payload));
 
   if (!created?.id) throw new Error('сообщение создано, но в ответе нет id');
+
+  // Связь с записью — отдельной строкой: у сообщения их может быть несколько.
+  if (svyazkaId) {
+    await client.post<unknown>('/rest/svyaziSoobshcheniya', {
+      soobshchenieId: created.id,
+      svyazkaChatovId: svyazkaId,
+    });
+  }
 
   void receivedAt;
 

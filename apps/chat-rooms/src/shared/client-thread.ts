@@ -1,5 +1,7 @@
 import { RestApiClient } from 'twenty-client-sdk/rest';
 
+import { messageIdsOfTargets } from 'src/shared/message-links';
+
 /**
  * Переписка с клиентом из карточки сделки.
  *
@@ -422,10 +424,14 @@ export const messagesOfDeal = async (
 ): Promise<ClientMessage[]> => {
   if (targetIds.length === 0) return [];
 
+  const messageIds = await messageIdsOfTargets(targetIds);
+
+  if (messageIds.length === 0) return [];
+
   const rows = rowsOf(
     await client.get<unknown>('/rest/soobshcheniya', {
       query: {
-        filter: `svyazkaId[in]:[${targetIds.join(',')}]`,
+        filter: `id[in]:[${messageIds.join(',')}]`,
         select: 'id,tekst,createdAt,chatId,napravlenie,statusDostavki,avtorId',
         orderBy: 'createdAt',
         limit: 200,

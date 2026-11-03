@@ -13,6 +13,7 @@ import {
   ensureChatForContact,
   ensureTarget,
 } from 'src/shared/client-thread';
+import { addLink } from 'src/shared/message-links';
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -76,9 +77,11 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
     // подписываем, иначе отправка упрётся в проверку участия.
     await chat.ensureParticipant(context.workspaceMemberId, chatId);
 
-    const result = await chat.send(context.workspaceMemberId, chatId, text, [], {
-      svyazkaId: targetId,
-    });
+    const result = await chat.send(context.workspaceMemberId, chatId, text);
+
+    // Привязка к сделке — отдельной связью сообщения, поэтому к сделке можно
+    // привязать и одно сообщение, и несколько.
+    await addLink(result.id, targetId);
 
     return json({ ...result, chatId, targetId, personId: contact.personId });
   } catch (error) {

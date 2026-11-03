@@ -1,5 +1,6 @@
 import { RestApiClient } from 'twenty-client-sdk/rest';
 
+import { linksOfMessages } from 'src/shared/message-links';
 import { PRESENCE_TTL_MS, isPresent, setOpenTarget, takeOpenTarget } from 'src/shared/presence';
 
 /**
@@ -45,8 +46,8 @@ export type MessageView = {
   /** Направление и статус доставки — есть только у сообщений каналов связи. */
   napravlenie: string | null;
   statusDostavki: string | null;
-  /** Сделка, к которой отнесено сообщение (связка чата). */
-  svyazkaId: string | null;
+  /** Записи, к которым отнесено сообщение (связки чатов): сделка, ремонт, тендер, заправка, задача. */
+  svyazkaIds: string[];
 };
 
 /**
@@ -319,7 +320,7 @@ export class ChatService {
     const response = await this.client.get<unknown>('/rest/soobshcheniya', {
       query: {
         filter: `chatId[eq]:"${chatId}"`,
-        select: 'id,tekst,createdAt,avtorId,chatId,napravlenie,statusDostavki,svyazkaId',
+        select: 'id,tekst,createdAt,avtorId,chatId,napravlenie,statusDostavki',
         limit: 60,
       },
     });
@@ -327,6 +328,11 @@ export class ChatService {
     const names = await this.memberNames();
     const rows = rowsOf(response, 'soobshcheniya').filter((message) => !!message.id);
     const mentionMap = await this.mentionsByMessage(rows.map((message) => String(message.id)));
+    const linkMap = new Map<string, string[]>();
+
+    for (const link of await linksOfMessages(rows.map((message) => String(message.id)))) {
+      linkMap.set(link.soobshchenieId, [...(linkMap.get(link.soobshchenieId) ?? []), link.svyazkaChatovId]);
+    }
 
     const messages = rows
       .map((message) => {
@@ -342,7 +348,7 @@ export class ChatService {
           mentions: mentionMap.get(id) ?? [],
           napravlenie: asString(message.napravlenie),
           statusDostavki: asString(message.statusDostavki),
-          svyazkaId: asString(message.svyazkaId),
+          svyazkaIds: linkMap.get(id) ?? [],
         };
       })
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));

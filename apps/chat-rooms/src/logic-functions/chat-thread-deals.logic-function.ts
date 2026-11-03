@@ -8,6 +8,7 @@ import { RestApiClient } from 'twenty-client-sdk/rest';
 
 import { CHAT_THREAD_DEALS_FUNCTION_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 import { ChatService, describeError } from 'src/shared/chat-service';
+import { linksOfMessages } from 'src/shared/message-links';
 
 /**
  * Сделки, которые встречаются в переписке — для фильтра ленты.
@@ -44,20 +45,22 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
     const messages = rowsOf(
       await client.get<unknown>('/rest/soobshcheniya', {
         query: {
-          filter: `and(chatId[eq]:"${chatId}",svyazkaId[is]:NOT_NULL)`,
-          select: 'id,svyazkaId',
+          filter: `chatId[eq]:"${chatId}"`,
+          select: 'id',
           limit: 300,
         },
       }),
       'soobshcheniya',
     );
 
+    const links = await linksOfMessages(
+      messages.map((message) => String(message.id ?? '')).filter(Boolean),
+    );
+
     const counts = new Map<string, number>();
 
-    for (const message of messages) {
-      const id = String(message.svyazkaId ?? '');
-
-      if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
+    for (const link of links) {
+      counts.set(link.svyazkaChatovId, (counts.get(link.svyazkaChatovId) ?? 0) + 1);
     }
 
     const ids = [...counts.keys()];
