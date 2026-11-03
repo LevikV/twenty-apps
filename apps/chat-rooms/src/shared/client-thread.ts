@@ -410,6 +410,7 @@ export type ClientMessage = {
   statusDostavki: string;
   chatId: string;
   personId: string;
+  authorId: string;
   authorName: string;
 };
 
@@ -424,7 +425,7 @@ export const messagesOfDeal = async (
     await client.get<unknown>('/rest/soobshcheniya', {
       query: {
         filter: `svyazkaId[in]:[${targetIds.join(',')}]`,
-        select: 'id,tekst,createdAt,chatId,napravlenie,statusDostavki',
+        select: 'id,tekst,createdAt,chatId,napravlenie,statusDostavki,avtorId',
         orderBy: 'createdAt',
         limit: 200,
       },
@@ -458,14 +459,48 @@ export const messagesOfDeal = async (
     }
   }
 
-  return rows.map((row) => ({
-    id: String(row.id ?? ''),
-    text: String(row.tekst ?? ''),
-    createdAt: String(row.createdAt ?? ''),
-    napravlenie: String(row.napravlenie ?? ''),
-    statusDostavki: String(row.statusDostavki ?? ''),
-    chatId: String(row.chatId ?? ''),
-    personId: personByChat.get(String(row.chatId ?? '')) ?? '',
-    authorName: nameByChat.get(String(row.chatId ?? '')) ?? 'Клиент',
-  }));
+  const authorIds = Array.from(
+    new Set(rows.map((row) => String(row.avtorId ?? '')).filter(Boolean)),
+  );
+  const nameByAuthor = new Map<string, string>();
+
+  if (authorIds.length > 0) {
+    const members = rowsOf(
+      await client.get<unknown>('/rest/workspaceMembers', {
+        query: {
+          filter: `id[in]:[${authorIds.join(',')}]`,
+          select: 'id,name',
+          limit: 50,
+        },
+      }),
+      'workspaceMembers',
+    );
+
+    for (const member of members) {
+      const name = member.name as Record<string, unknown> | null;
+      const full = [name?.firstName, name?.lastName].filter(Boolean).join(' ').trim();
+
+      nameByAuthor.set(String(member.id ?? ''), full || 'Сотрудник');
+    }
+  }
+
+  return rows.map((row) => {
+    const personId = personByChat.get(String(row.chatId ?? '')) ?? '';
+    const authorId = String(row.avtorId ?? '');
+    const outgoing = String(row.napravlenie ?? '') === 'ISHODYASHCHIE';
+
+    return {
+      id: String(row.id ?? ''),
+      text: String(row.tekst ?? ''),
+      createdAt: String(row.createdAt ?? ''),
+      napravlenie: String(row.napravlenie ?? ''),
+      statusDostavki: String(row.statusDostavki ?? ''),
+      chatId: String(row.chatId ?? ''),
+      personId,
+      authorId: outgoing ? authorId : personId,
+      authorName: outgoing
+        ? nameByAuthor.get(authorId) ?? 'Сотрудник'
+        : nameByChat.get(String(row.chatId ?? '')) ?? 'Клиент',
+    };
+  });
 };

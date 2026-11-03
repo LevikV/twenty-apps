@@ -44,6 +44,7 @@ type ClientMessage = {
   napravlenie?: string | null;
   statusDostavki?: string | null;
   personId?: string;
+  authorId?: string;
 };
 
 /** Цвета собеседников: у каждого контакта свой, чтобы лента читалась с листа. */
@@ -702,7 +703,7 @@ export const CardChat = () => {
 
               {clientThread.messages.map((message) => {
                 const mine = message.napravlenie === 'ISHODYASHCHIE';
-                const bubble = mine ? '#1961ff' : contactColor(message.personId ?? '');
+                const bubble = contactColor(message.authorId || message.personId || 'клиент');
 
                 return (
                   <div
@@ -710,13 +711,13 @@ export const CardChat = () => {
                     style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', gap: '2px' }}
                   >
                     <div style={{ fontSize: '11px', color: '#8b8b8b' }}>
-                      {mine ? 'Вы' : message.authorName} · {formatTime(message.createdAt)}
+                      {message.authorName} · {formatTime(message.createdAt)}
                     </div>
                     <div
                       style={{
                         maxWidth: '85%',
                         background: bubble,
-                        color: mine ? '#fff' : '#1a1a1a',
+                        color: '#1a1a1a',
                         borderRadius: '8px',
                         padding: '7px 10px',
                         fontSize: '13px',
