@@ -1,5 +1,7 @@
 import { RestApiClient } from 'twenty-client-sdk/rest';
 
+import { readAllRows } from 'src/shared/paging';
+
 /**
  * Связи сообщения с записями.
  *
@@ -46,35 +48,64 @@ export const rowsOf = (body: unknown, key: string): Record<string, unknown>[] =>
   return Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
 };
 
-const readLinks = async (filter: string, limit: number): Promise<MessageLink[]> => {
-  const rows = rowsOf(
-    await client.get<unknown>('/rest/svyaziSoobshcheniya', {
-      query: { filter, select: 'id,soobshchenieId,svyazkaChatovId', limit },
-    }),
-    'svyaziSoobshcheniya',
-  );
+const IN_CHUNK = 30; // сколько id кладём в фильтр [in], чтобы не рвать строку запроса
 
-  return rows
+const normalize = (rows: Record<string, unknown>[]): MessageLink[] =>
+  rows
     .map((row) => ({
       id: String(row.id ?? ''),
       soobshchenieId: String(row.soobshchenieId ?? ''),
       svyazkaChatovId: String(row.svyazkaChatovId ?? ''),
     }))
     .filter((row) => row.id && row.soobshchenieId && row.svyazkaChatovId);
+
+/** Все связи по фильтру — курсором, страница за страницей. */
+const readLinks = async (filter: string): Promise<MessageLink[]> => {
+  const rows = await readAllRows({
+    client,
+    path: '/rest/svyaziSoobshcheniya',
+    key: 'svyaziSoobshcheniya',
+    filter,
+    select: 'id,soobshchenieId,svyazkaChatovId',
+  });
+
+  return normalize(rows);
 };
 
-/** Связи для набора сообщений. */
-export const linksOfMessages = (messageIds: string[]): Promise<MessageLink[]> => {
-  if (messageIds.length === 0) return Promise.resolve([]);
+const chunks = <T,>(items: T[], size: number): T[][] => {
+  const result: T[][] = [];
 
-  return readLinks(`soobshchenieId[in]:[${messageIds.join(',')}]`, 500);
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size));
+  }
+
+  return result;
+};
+
+/** Связи для набора сообщений (пачками, чтобы не рвать запрос). */
+export const linksOfMessages = async (messageIds: string[]): Promise<MessageLink[]> => {
+  if (messageIds.length === 0) return [];
+
+  const result: MessageLink[] = [];
+
+  for (const chunk of chunks(messageIds, IN_CHUNK)) {
+    result.push(...(await readLinks(`soobshchenieId[in]:[${chunk.join(',')}]`)));
+  }
+
+  return result;
 };
 
 /** Связи, ведущие на набор связок чатов (то есть на конкретные записи). */
-export const linksOfTargets = (targetIds: string[]): Promise<MessageLink[]> => {
-  if (targetIds.length === 0) return Promise.resolve([]);
+export const linksOfTargets = async (targetIds: string[]): Promise<MessageLink[]> => {
+  if (targetIds.length === 0) return [];
 
-  return readLinks(`svyazkaChatovId[in]:[${targetIds.join(',')}]`, 500);
+  const result: MessageLink[] = [];
+
+  for (const chunk of chunks(targetIds, IN_CHUNK)) {
+    result.push(...(await readLinks(`svyazkaChatovId[in]:[${chunk.join(',')}]`)));
+  }
+
+  return result;
 };
 
 /** Идентификаторы сообщений, привязанных хотя бы к одной из записей. */

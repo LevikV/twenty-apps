@@ -9,6 +9,7 @@ import { RestApiClient } from 'twenty-client-sdk/rest';
 import { CHAT_THREAD_DEALS_FUNCTION_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 import { ChatService, describeError } from 'src/shared/chat-service';
 import { linksOfMessages } from 'src/shared/message-links';
+import { readAllRows } from 'src/shared/paging';
 
 /**
  * Сделки, которые встречаются в переписке — для фильтра ленты.
@@ -42,16 +43,13 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
   }
 
   try {
-    const messages = rowsOf(
-      await client.get<unknown>('/rest/soobshcheniya', {
-        query: {
-          filter: `chatId[eq]:"${chatId}"`,
-          select: 'id',
-          limit: 300,
-        },
-      }),
-      'soobshcheniya',
-    );
+    const messages = await readAllRows({
+      client,
+      path: '/rest/soobshcheniya',
+      key: 'soobshcheniya',
+      filter: `chatId[eq]:"${chatId}"`,
+      select: 'id',
+    });
 
     const links = await linksOfMessages(
       messages.map((message) => String(message.id ?? '')).filter(Boolean),

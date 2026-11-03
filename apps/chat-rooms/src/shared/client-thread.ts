@@ -1,6 +1,7 @@
 import { RestApiClient } from 'twenty-client-sdk/rest';
 
 import { messageIdsOfTargets } from 'src/shared/message-links';
+import { readAllRows } from 'src/shared/paging';
 
 /**
  * Переписка с клиентом из карточки сделки.
@@ -428,17 +429,23 @@ export const messagesOfDeal = async (
 
   if (messageIds.length === 0) return [];
 
-  const rows = rowsOf(
-    await client.get<unknown>('/rest/soobshcheniya', {
-      query: {
-        filter: `id[in]:[${messageIds.join(',')}]`,
+  // Пачками по 30 id и с добором страниц: у старой сделки сообщений может быть
+  // больше 200, а один запрос отдаёт максимум 200 строк.
+  const rows: Record<string, unknown>[] = [];
+
+  for (let index = 0; index < messageIds.length; index += 30) {
+    const chunk = messageIds.slice(index, index + 30);
+
+    rows.push(
+      ...(await readAllRows({
+        client,
+        path: '/rest/soobshcheniya',
+        key: 'soobshcheniya',
+        filter: `id[in]:[${chunk.join(',')}]`,
         select: 'id,tekst,createdAt,chatId,napravlenie,statusDostavki,avtorId',
-        orderBy: 'createdAt',
-        limit: 200,
-      },
-    }),
-    'soobshcheniya',
-  );
+      })),
+    );
+  }
 
   const chatIds = Array.from(new Set(rows.map((row) => String(row.chatId ?? '')).filter(Boolean)));
 
