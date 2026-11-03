@@ -412,6 +412,7 @@ export type ClientMessage = {
   personId: string;
   authorId: string;
   authorName: string;
+  channelId: string;
 };
 
 /** Сообщения, привязанные к сделке, от любых контактов покупателя. */
@@ -438,13 +439,14 @@ export const messagesOfDeal = async (
   const nameByPerson = new Map(contacts.map((item) => [item.personId, item.name]));
   const nameByChat = new Map<string, string>();
   const personByChat = new Map<string, string>();
+  const channelByChat = new Map<string, string>();
 
   if (chatIds.length > 0) {
     const chats = rowsOf(
       await client.get<unknown>('/rest/chats', {
         query: {
           filter: `id[in]:[${chatIds.join(',')}]`,
-          select: 'id,kontaktId',
+          select: 'id,kontaktId,shlyuzId',
           limit: 200,
         },
       }),
@@ -456,6 +458,7 @@ export const messagesOfDeal = async (
 
       nameByChat.set(String(chat.id ?? ''), nameByPerson.get(personId) ?? 'Клиент');
       personByChat.set(String(chat.id ?? ''), personId);
+      channelByChat.set(String(chat.id ?? ''), String(chat.shlyuzId ?? ''));
     }
   }
 
@@ -501,6 +504,7 @@ export const messagesOfDeal = async (
       authorName: outgoing
         ? nameByAuthor.get(authorId) ?? 'Сотрудник'
         : nameByChat.get(String(row.chatId ?? '')) ?? 'Клиент',
+      channelId: channelByChat.get(String(row.chatId ?? '')) ?? '',
     };
   });
 };

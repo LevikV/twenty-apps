@@ -45,6 +45,7 @@ type ClientMessage = {
   statusDostavki?: string | null;
   personId?: string;
   authorId?: string;
+  channelId?: string;
 };
 
 /** Цвета собеседников: у каждого контакта свой, чтобы лента читалась с листа. */
@@ -204,6 +205,8 @@ export const CardChat = () => {
   const [clientDraft, setClientDraft] = useState('');
   const [clientError, setClientError] = useState<string | null>(null);
   const [clientPersonId, setClientPersonId] = useState('');
+  const [meId, setMeId] = useState('');
+  const [onlyMine, setOnlyMine] = useState(false);
   const clientListRef = useRef<HTMLDivElement | null>(null);
   const [clientChannelId, setClientChannelId] = useState('');
   const [clientSending, setClientSending] = useState(false);
@@ -323,7 +326,7 @@ export const CardChat = () => {
     if (node) {
       node.scrollTop = node.scrollHeight;
     }
-  }, [clientThread?.messages.length, clientThread?.chatId, tab]);
+  }, [clientThread?.messages.length, clientThread?.chatId, tab, onlyMine]);
 
   useEffect(() => {
     void reload();
@@ -407,6 +410,8 @@ export const CardChat = () => {
         if (!userId) {
           return;
         }
+
+        setMeId(userId);
 
         socketRef.current = connectChatSocket(envFunctionsBase(), userId, {
           onChat: (chatId) => {
@@ -617,6 +622,16 @@ export const CardChat = () => {
   ) : null;
 
   if (isDeal && tab === 'client') {
+    // «Только мои»: мои отправленные и ответы клиента на мои каналы.
+    const myChannelIds = new Set((clientThread?.channels ?? []).map((channel) => channel.id));
+    const visibleClientMessages = (clientThread?.messages ?? []).filter(
+      (message) =>
+        !onlyMine ||
+        (message.napravlenie === 'ISHODYASHCHIE'
+          ? message.authorId === meId
+          : myChannelIds.has(message.channelId ?? '')),
+    );
+
     return (
       <div
         style={{
@@ -681,6 +696,26 @@ export const CardChat = () => {
                   ))}
                 </select>
               )}
+
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  marginLeft: 'auto',
+                  fontSize: '11px',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={onlyMine}
+                  onChange={(event) => setOnlyMine(event.target.checked)}
+                  style={{ margin: 0 }}
+                />
+                Только мои
+              </label>
             </div>
 
             <div
@@ -695,13 +730,13 @@ export const CardChat = () => {
                 padding: '2px',
               }}
             >
-              {clientThread.messages.length === 0 && (
+              {visibleClientMessages.length === 0 && (
                 <div style={{ fontSize: '13px', color: '#8b8b8b', padding: '8px 0' }}>
                   Сообщений пока нет.
                 </div>
               )}
 
-              {clientThread.messages.map((message) => {
+              {visibleClientMessages.map((message) => {
                 const mine = message.napravlenie === 'ISHODYASHCHIE';
                 const bubble = contactColor(message.authorId || message.personId || 'клиент');
 
