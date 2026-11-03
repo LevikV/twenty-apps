@@ -12,6 +12,8 @@ export const MAIN_PAGE_NAVIGATION_MENU_ITEM_UNIVERSAL_IDENTIFIER =
 
 // Логик-функции: маршруты «Центра коммуникации» (данные отдаёт приложение,
 // потому что у кастомных объектов чата нет прав у ролей сотрудников).
+export const CHAT_LINK_SEARCH_FUNCTION_UNIVERSAL_IDENTIFIER =
+  'b8d66b34-250d-498c-be2b-82a10f044bba';
 export const CHAT_LINK_ADD_FUNCTION_UNIVERSAL_IDENTIFIER =
   'f34ab40b-0ee5-4962-8c22-0bb7dc4e275a';
 export const CHAT_LINK_REMOVE_FUNCTION_UNIVERSAL_IDENTIFIER =

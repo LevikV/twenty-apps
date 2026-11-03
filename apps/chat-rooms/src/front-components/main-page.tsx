@@ -49,6 +49,22 @@ type Message = {
   svyazkaIds?: string[];
 };
 
+type LinkResult = {
+  kind: string;
+  recordId: string;
+  title: string;
+  label: string;
+};
+
+/** Подпись типа записи в лейбле под сообщением. */
+const LINK_KIND_LABEL: Record<string, string> = {
+  sdelkaOpportunity: 'Заказ',
+  sdelkaRemontOborudovaniya: 'Ремонт',
+  sdelkaTender: 'Тендер',
+  sdelkaZapravkaKartridzhey: 'Заправка',
+  zadacha: 'Задача',
+};
+
 const formatChannelPhone = (value: string | null): string => {
   const digits = String(value ?? '').replace(/\D/g, '');
 
@@ -237,7 +253,14 @@ const ChatCenter = () => {
   const [dialogSearch, setDialogSearch] = useState('');
   const [channelFilter, setChannelFilter] = useState<string>('all');
   const [dealFilter, setDealFilter] = useState<string>('all');
-  const [threadDeals, setThreadDeals] = useState<{ id: string; name: string; count: number }[]>([]);
+  const [threadDeals, setThreadDeals] = useState<
+    { id: string; name: string; count: number; kind?: string; recordId?: string }[]
+  >([]);
+  // Привязка сообщения к записи: открытый редактор, поиск и его результаты.
+  const [linkFor, setLinkFor] = useState<string | null>(null);
+  const [linkQuery, setLinkQuery] = useState('');
+  const [linkResults, setLinkResults] = useState<LinkResult[]>([]);
+  const [linkBusy, setLinkBusy] = useState(false);
   // Экраны центра: сами диалоги или подключение своих каналов.
   const [view, setView] = useState<'chats' | 'channels'>('chats');
   // Создание личного диалога: выбираем сотрудника из списка.
@@ -277,6 +300,54 @@ const ChatCenter = () => {
 
     setMessages(result.messages ?? []);
   }, []);
+
+  const loadThreadDeals = useCallback(async (chatId: string) => {
+    try {
+      const result = await callRoute<{
+        deals: { id: string; name: string; count: number; kind?: string; recordId?: string }[];
+      }>(`/chat-thread-deals?chatId=${encodeURIComponent(chatId)}`);
+
+      setThreadDeals(result.deals ?? []);
+    } catch {
+      setThreadDeals([]);
+    }
+  }, []);
+
+  /** Добавить или снять связь сообщения, затем перечитать ленту и лейблы. */
+  const changeLink = useCallback(
+    async (
+      action: 'add' | 'remove',
+      payload: {
+        messageId: string;
+        kind?: string;
+        recordId?: string;
+        targetId?: string;
+      },
+    ) => {
+      setLinkBusy(true);
+
+      try {
+        await callRoute(action === 'add' ? '/chat-link-add' : '/chat-link-remove', {
+          method: 'POST',
+          body: payload,
+        });
+
+        const chatId = activeChatIdRef.current;
+
+        if (chatId) {
+          await loadMessages(chatId);
+          await loadThreadDeals(chatId);
+        }
+
+        setLinkFor(null);
+        setLinkQuery('');
+        setLinkResults([]);
+      } finally {
+        setLinkBusy(false);
+      }
+    },
+    [loadMessages, loadThreadDeals],
+  );
 
   const markRead = useCallback(async (chatId: string) => {
     await callRoute('/chat-read', { method: 'POST', body: { chatId } });
@@ -723,22 +794,40 @@ const ChatCenter = () => {
       return;
     }
 
+    void loadThreadDeals(activeChatId);
+  }, [activeChatId, activeChat?.tip, loadThreadDeals]);
+
+  // Поиск записи для привязки — с задержкой, чтобы не дёргать сервер на каждую букву.
+  useEffect(() => {
+    if (!linkFor) return;
+
+    const query = linkQuery.trim();
+
+    if (query.length < 2) {
+      setLinkResults([]);
+
+      return;
+    }
+
     let alive = true;
 
-    void callRoute<{ deals: { id: string; name: string; count: number }[] }>(
-      `/chat-thread-deals?chatId=${encodeURIComponent(activeChatId)}`,
-    )
-      .then((result) => {
-        if (alive) setThreadDeals(result.deals ?? []);
-      })
-      .catch(() => {
-        if (alive) setThreadDeals([]);
-      });
+    const timer = setTimeout(() => {
+      void callRoute<{ results: LinkResult[] }>(
+        `/chat-link-search?q=${encodeURIComponent(query)}`,
+      )
+        .then((result) => {
+          if (alive) setLinkResults(result.results ?? []);
+        })
+        .catch(() => {
+          if (alive) setLinkResults([]);
+        });
+    }, 250);
 
     return () => {
       alive = false;
+      clearTimeout(timer);
     };
-  }, [activeChatId, activeChat?.tip]);
+  }, [linkFor, linkQuery]);
 
   const visibleMessages =
     dealFilter === 'all'
@@ -1307,6 +1396,132 @@ const ChatCenter = () => {
                           }}
                         >
                           {DELIVERY_LABEL[message.statusDostavki]?.text ?? message.statusDostavki}
+                        </div>
+                      )}
+
+                      {/* Лейблы сделок — только в Центре коммуникации, в карточке
+                          записи связи не показываем и не меняем. */}
+                      {activeChat?.tip === 'KLIENT' && (
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            gap: '4px',
+                            marginTop: '4px',
+                            alignItems: 'center',
+                            justifyContent: isMine ? 'flex-end' : 'flex-start',
+                          }}
+                        >
+                          {(message.svyazkaIds ?? []).map((linkId) => {
+                            const deal = threadDeals.find((item) => item.id === linkId);
+
+                            return (
+                              <span
+                                key={linkId}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  background: '#eef3ff',
+                                  border: '1px solid #cddcff',
+                                  color: '#1961ff',
+                                  borderRadius: '10px',
+                                  padding: '1px 6px',
+                                  fontSize: '10px',
+                                }}
+                              >
+                                {deal
+                                  ? `${LINK_KIND_LABEL[deal.kind ?? ''] ?? ''} ${deal.name}`.trim()
+                                  : 'Запись'}
+                                <button
+                                  type="button"
+                                  title="Снять связь"
+                                  disabled={linkBusy}
+                                  onClick={() =>
+                                    void changeLink('remove', {
+                                      messageId: message.id,
+                                      targetId: linkId,
+                                    })
+                                  }
+                                  style={{
+                                    border: 'none',
+                                    background: 'transparent',
+                                    color: '#1961ff',
+                                    cursor: linkBusy ? 'default' : 'pointer',
+                                    padding: 0,
+                                    fontSize: '11px',
+                                    lineHeight: 1,
+                                  }}
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            );
+                          })}
+
+                          {linkFor === message.id ? (
+                            <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '2px' }}>
+                              <input
+                                autoFocus
+                                value={linkQuery}
+                                onChange={(event) => setLinkQuery(event.target.value)}
+                                placeholder="номер или название"
+                                style={{
+                                  width: '190px',
+                                  fontSize: '11px',
+                                  padding: '2px 6px',
+                                  border: '1px solid #cddcff',
+                                  borderRadius: '8px',
+                                  outline: 'none',
+                                }}
+                              />
+                              {linkResults.map((item) => (
+                                <button
+                                  key={`${item.kind}:${item.recordId}`}
+                                  type="button"
+                                  disabled={linkBusy}
+                                  onClick={() =>
+                                    void changeLink('add', {
+                                      messageId: message.id,
+                                      kind: item.kind,
+                                      recordId: item.recordId,
+                                    })
+                                  }
+                                  style={{
+                                    textAlign: 'left',
+                                    border: '1px solid #e2e8f5',
+                                    background: '#fff',
+                                    borderRadius: '6px',
+                                    padding: '2px 6px',
+                                    fontSize: '10px',
+                                    cursor: linkBusy ? 'default' : 'pointer',
+                                  }}
+                                >
+                                  {item.label} · {item.title}
+                                </button>
+                              ))}
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setLinkFor(message.id);
+                                setLinkQuery('');
+                                setLinkResults([]);
+                              }}
+                              style={{
+                                border: '1px dashed #cddcff',
+                                background: 'transparent',
+                                color: '#1961ff',
+                                borderRadius: '10px',
+                                padding: '1px 6px',
+                                fontSize: '10px',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              + связь
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>

@@ -74,20 +74,87 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
       await client.get<unknown>('/rest/chatTargets', {
         query: {
           filter: `id[in]:[${ids.map((id) => `"${id}"`).join(',')}]`,
-          select: 'id,name',
+          select:
+            'id,sdelkaOpportunityId,sdelkaRemontOborudovaniyaId,sdelkaTenderId,sdelkaZapravkaKartridzheyId,zadachaId',
           limit: ids.length,
         },
       }),
       'chatTargets',
     );
 
-    const names = new Map(targets.map((row) => [String(row.id), String(row.name ?? '')]));
+    // Название берём у самой записи, а не у связки: «Переписка · НФФР-000517»
+    // в лейбле под сообщением читается плохо.
+    const SOURCES = [
+      { field: 'sdelkaOpportunityId', path: 'opportunities', title: 'name', kind: 'sdelkaOpportunity', label: 'Заказ' },
+      { field: 'sdelkaRemontOborudovaniyaId', path: 'remontOborudovaniyas', title: 'name', kind: 'sdelkaRemontOborudovaniya', label: 'Ремонт' },
+      { field: 'sdelkaTenderId', path: 'tendery', title: 'name', kind: 'sdelkaTender', label: 'Тендер' },
+      { field: 'sdelkaZapravkaKartridzheyId', path: 'zapravkaKartridzheys', title: 'name', kind: 'sdelkaZapravkaKartridzhey', label: 'Заправка' },
+      { field: 'zadachaId', path: 'tasks', title: 'title', kind: 'zadacha', label: 'Задача' },
+    ];
 
-    const deals = ids.map((id) => ({
-      id,
-      name: names.get(id) || 'Сделка без названия',
-      count: counts.get(id) ?? 0,
-    }));
+    const recordOf = (target: Record<string, unknown>) => {
+      for (const source of SOURCES) {
+        const recordId = String(target[source.field] ?? '');
+
+        if (recordId) return { recordId, source };
+      }
+
+      return null;
+    };
+
+    const recordIdsByPath = new Map<string, Set<string>>();
+
+    for (const target of targets) {
+      const found = recordOf(target);
+
+      if (!found) continue;
+
+      const bucket = recordIdsByPath.get(found.source.path) ?? new Set<string>();
+
+      bucket.add(found.recordId);
+      recordIdsByPath.set(found.source.path, bucket);
+    }
+
+    const titles = new Map<string, string>();
+
+    await Promise.all(
+      SOURCES.map(async (source) => {
+        const recordIds = [...(recordIdsByPath.get(source.path) ?? [])];
+
+        if (recordIds.length === 0) return;
+
+        const rows = rowsOf(
+          await client.get<unknown>(`/rest/${source.path}`, {
+            query: {
+              filter: `id[in]:[${recordIds.map((id) => `"${id}"`).join(',')}]`,
+              select: `id,${source.title}`,
+              limit: recordIds.length,
+            },
+          }),
+          source.path,
+        );
+
+        for (const row of rows) {
+          titles.set(String(row.id ?? ''), String(row[source.title] ?? ''));
+        }
+      }),
+    );
+
+    const byId = new Map(targets.map((row) => [String(row.id), row]));
+
+    const deals = ids.map((id) => {
+      const target = byId.get(id);
+      const found = target ? recordOf(target) : null;
+      const title = found ? titles.get(found.recordId) : '';
+
+      return {
+        id,
+        name: title || (found ? `${found.source.label} без названия` : 'Запись без названия'),
+        kind: found?.source.kind ?? '',
+        recordId: found?.recordId ?? '',
+        count: counts.get(id) ?? 0,
+      };
+    });
 
     return new Response(JSON.stringify({ deals }), {
       status: 200,
