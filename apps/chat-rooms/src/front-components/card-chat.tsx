@@ -206,7 +206,7 @@ export const CardChat = () => {
   const [clientError, setClientError] = useState<string | null>(null);
   const [clientPersonId, setClientPersonId] = useState('');
   const [meId, setMeId] = useState('');
-  const [onlyMine, setOnlyMine] = useState(true);
+  const [onlyMine, setOnlyMine] = useState(false);
   const clientListRef = useRef<HTMLDivElement | null>(null);
   const [clientChannelId, setClientChannelId] = useState('');
   const [clientSending, setClientSending] = useState(false);
