@@ -512,8 +512,8 @@ export class ChatService {
   }
 
   /** Текущий сотрудник: идентификатор пользователя для подписки на сокет. */
-  async me(memberId: string): Promise<{ userId: string | null }> {
-    return { userId: await this.memberUserId(memberId) };
+  async me(memberId: string): Promise<{ userId: string | null; memberId: string }> {
+    return { userId: await this.memberUserId(memberId), memberId };
   }
 
   /** Куда вести по пушу: карточка объекта для чатов сделок, иначе — страница диалогов. */

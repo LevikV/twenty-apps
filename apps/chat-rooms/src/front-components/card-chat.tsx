@@ -206,7 +206,7 @@ export const CardChat = () => {
   const [clientError, setClientError] = useState<string | null>(null);
   const [clientPersonId, setClientPersonId] = useState('');
   const [meId, setMeId] = useState('');
-  const [onlyMine, setOnlyMine] = useState(false);
+  const [onlyMine, setOnlyMine] = useState(true);
   const clientListRef = useRef<HTMLDivElement | null>(null);
   const [clientChannelId, setClientChannelId] = useState('');
   const [clientSending, setClientSending] = useState(false);
@@ -399,7 +399,7 @@ export const CardChat = () => {
   useEffect(() => {
     let disposed = false;
 
-    void callRoute<{ userId: string | null }>('/chat-me')
+    void callRoute<{ userId: string | null; memberId?: string | null }>('/chat-me')
       .then((me) => {
         if (disposed) {
           return;
@@ -407,11 +407,13 @@ export const CardChat = () => {
 
         const userId = String(me.userId ?? '');
 
+        // Автор сообщения — участник рабочих пространств (workspaceMember),
+        // а userId нужен только для подписки на сокет.
+        setMeId(String(me.memberId ?? userId));
+
         if (!userId) {
           return;
         }
-
-        setMeId(userId);
 
         socketRef.current = connectChatSocket(envFunctionsBase(), userId, {
           onChat: (chatId) => {
@@ -627,6 +629,7 @@ export const CardChat = () => {
     const visibleClientMessages = (clientThread?.messages ?? []).filter(
       (message) =>
         !onlyMine ||
+        !meId ||
         (message.napravlenie === 'ISHODYASHCHIE'
           ? message.authorId === meId
           : myChannelIds.has(message.channelId ?? '')),
