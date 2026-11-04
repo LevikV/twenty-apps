@@ -60,14 +60,9 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
   try {
     const pages = await Promise.all(
       SOURCES.map(async (source) => {
-        // У задачи поля name нет — фильтр строим по существующему полю.
-        const conditions = [`${source.titleField}[ilike]:"${pattern}"`];
-
-        if (source.titleField !== 'name') conditions.push(`name[ilike]:"${pattern}"`);
-
         const body = await client.get<unknown>(source.path, {
           query: {
-            filter: conditions.length > 1 ? `or(${conditions.join(',')})` : conditions[0],
+            filter: `${source.titleField}[ilike]:"${pattern}"`,
             select: `id,${source.titleField}`,
             limit: 8,
           },

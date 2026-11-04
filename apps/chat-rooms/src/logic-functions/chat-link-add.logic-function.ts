@@ -14,7 +14,7 @@ import {
   KIND_FIELD,
   type LinkKind,
 } from 'src/shared/message-links';
-import { isAdmin } from 'src/shared/roles';
+import { canManageMessage } from 'src/shared/roles';
 
 const client = new RestApiClient({ runAs: 'application' });
 
@@ -51,11 +51,14 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
 
     if (!row?.id) return json({ error: 'сообщение не найдено' }, 404);
 
-    const memberId = context.workspaceMemberId;
-    const isAuthor = String(row.avtorId ?? '') === memberId;
+    const allowed = await canManageMessage({
+      memberId: context.workspaceMemberId,
+      authorId: String(row.avtorId ?? ''),
+      chatId: String(row.chatId ?? ''),
+    });
 
-    if (!isAuthor && !(await isAdmin(memberId))) {
-      return json({ error: 'Менять связи может автор сообщения или администратор' }, 403);
+    if (!allowed) {
+      return json({ error: 'Менять связи может автор, владелец канала или администратор' }, 403);
     }
 
     const targetId = await ensureChatTarget({

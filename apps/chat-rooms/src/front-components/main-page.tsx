@@ -56,6 +56,15 @@ type LinkResult = {
   label: string;
 };
 
+/** Имя объекта Twenty для открытия записи из лейбла. */
+const OBJECT_BY_KIND: Record<string, string> = {
+  sdelkaOpportunity: 'opportunity',
+  sdelkaRemontOborudovaniya: 'remontOborudovaniya',
+  sdelkaTender: 'tender',
+  sdelkaZapravkaKartridzhey: 'zapravkaKartridzhey',
+  zadacha: 'task',
+};
+
 /** Подпись типа записи в лейбле под сообщением. */
 const LINK_KIND_LABEL: Record<string, string> = {
   sdelkaOpportunity: 'Заказ',
@@ -1341,7 +1350,10 @@ const ChatCenter = () => {
               </span>
             </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', minHeight: 0 }}>
+            <div
+              onClick={() => setLinkFor(null)}
+              style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', minHeight: 0 }}
+            >
               {visibleMessages.length === 0 && (
                 <div style={{ fontSize: '13px', color: '#999' }}>
                   Сообщений пока нет — напишите первым
@@ -1418,6 +1430,22 @@ const ChatCenter = () => {
                             return (
                               <span
                                 key={linkId}
+                                title={deal ? 'Открыть запись' : ''}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+
+                                  const objectNameSingular = deal?.kind
+                                    ? OBJECT_BY_KIND[deal.kind]
+                                    : '';
+
+                                  if (!objectNameSingular || !deal?.recordId) return;
+
+                                  void openSidePanelPage({
+                                    page: SidePanelPages.ViewRecord,
+                                    objectNameSingular,
+                                    recordId: deal.recordId,
+                                  }).catch(() => undefined);
+                                }}
                                 style={{
                                   display: 'inline-flex',
                                   alignItems: 'center',
@@ -1428,6 +1456,7 @@ const ChatCenter = () => {
                                   borderRadius: '10px',
                                   padding: '1px 6px',
                                   fontSize: '10px',
+                                  cursor: deal?.recordId ? 'pointer' : 'default',
                                 }}
                               >
                                 {deal
@@ -1437,12 +1466,13 @@ const ChatCenter = () => {
                                   type="button"
                                   title="Снять связь"
                                   disabled={linkBusy}
-                                  onClick={() =>
+                                  onClick={(event) => {
+                                    event.stopPropagation();
                                     void changeLink('remove', {
                                       messageId: message.id,
                                       targetId: linkId,
-                                    })
-                                  }
+                                    });
+                                  }}
                                   style={{
                                     border: 'none',
                                     background: 'transparent',
@@ -1460,7 +1490,10 @@ const ChatCenter = () => {
                           })}
 
                           {linkFor === message.id ? (
-                            <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '2px' }}>
+                            <span
+                              onClick={(event) => event.stopPropagation()}
+                              style={{ display: 'inline-flex', flexDirection: 'column', gap: '2px' }}
+                            >
                               <input
                                 autoFocus
                                 value={linkQuery}
@@ -1504,7 +1537,8 @@ const ChatCenter = () => {
                           ) : (
                             <button
                               type="button"
-                              onClick={() => {
+                              onClick={(event) => {
+                                event.stopPropagation();
                                 setLinkFor(message.id);
                                 setLinkQuery('');
                                 setLinkResults([]);
