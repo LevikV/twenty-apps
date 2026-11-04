@@ -247,56 +247,150 @@ export const saveIncoming = async (params: {
   return { created: true, id: created.id };
 };
 
+type DealSource = {
+  kind: string;
+  field: string;
+  path: string;
+  key: string;
+  label: string;
+};
+
+/** Четыре типа сделок и их поля-покупатели. */
+const DEAL_SOURCES: DealSource[] = [
+  {
+    kind: 'sdelkaOpportunity',
+    field: 'sdelkaOpportunityId',
+    path: '/rest/opportunities',
+    key: 'opportunities',
+    label: 'Заказ',
+  },
+  {
+    kind: 'sdelkaRemontOborudovaniya',
+    field: 'sdelkaRemontOborudovaniyaId',
+    path: '/rest/remontOborudovaniyas',
+    key: 'remontOborudovaniyas',
+    label: 'Ремонт',
+  },
+  {
+    kind: 'sdelkaTender',
+    field: 'sdelkaTenderId',
+    path: '/rest/tendery',
+    key: 'tendery',
+    label: 'Тендер',
+  },
+  {
+    kind: 'sdelkaZapravkaKartridzhey',
+    field: 'sdelkaZapravkaKartridzheyId',
+    path: '/rest/zapravkaKartridzheys',
+    key: 'zapravkaKartridzheys',
+    label: 'Заправка',
+  },
+];
+
+const quoted = (ids: string[]) => `[${ids.map((id) => `"${id}"`).join(',')}]`;
+
+type DealHit = { kind: string; recordId: string; field: string; label: string };
+
+/**
+ * Открытые сделки клиента этого диалога.
+ *
+ * Клиент — контакт диалога; плюс компании, где он указан контактом, и его
+ * собственная компания. Открытая = статус «В работе».
+ */
+const openDealsOfChat = async (chatId: string): Promise<DealHit[]> => {
+  const chat = rowsOf(
+    await client.get<unknown>('/rest/chats', {
+      query: { filter: `id[eq]:"${chatId}"`, select: 'id,kontaktId,kompaniyaId', limit: 1 },
+    }),
+    'chats',
+  )[0];
+
+  if (!chat) return [];
+
+  const personIds = [String(chat.kontaktId ?? '')].filter(Boolean);
+  const companyIds = [String(chat.kompaniyaId ?? '')].filter(Boolean);
+
+  if (personIds.length > 0) {
+    const person = rowsOf(
+      await client.get<unknown>('/rest/people', {
+        query: { filter: `id[eq]:"${personIds[0]}"`, select: 'id,companyId', limit: 1 },
+      }),
+      'people',
+    )[0];
+
+    const ownCompany = String(person?.companyId ?? '');
+
+    if (ownCompany && !companyIds.includes(ownCompany)) companyIds.push(ownCompany);
+  }
+
+  const conditions: string[] = [];
+
+  if (personIds.length > 0) conditions.push(`pokupatelPersonId[in]:${quoted(personIds)}`);
+  if (companyIds.length > 0) conditions.push(`pokupatelCompanyId[in]:${quoted(companyIds)}`);
+
+  if (conditions.length === 0) return [];
+
+  const buyer = conditions.length > 1 ? `or(${conditions.join(',')})` : conditions[0];
+  const found: DealHit[] = [];
+
+  for (const source of DEAL_SOURCES) {
+    const rows = rowsOf(
+      await client.get<unknown>(source.path, {
+        query: {
+          filter: `status[eq]:"V_RABOTE",${buyer}`,
+          select: 'id',
+          limit: 2,
+        },
+      }),
+      source.key,
+    );
+
+    for (const row of rows) {
+      found.push({ kind: source.kind, recordId: String(row.id ?? ''), field: source.field, label: source.label });
+    }
+  }
+
+  return found;
+};
+
 /**
  * К какой сделке отнести входящее сообщение клиента.
  *
- * Клиент пишет сам, вне карточки — контекста нет. Одна связка у диалога —
- * относим к ней. Если связок несколько (клиент писал по разным сделкам),
- * берём ту, по которой шла последняя отправка из этого диалога: клиент
- * отвечает на последнее письмо менеджера. Нет отправок — не гадаем.
+ * Привязываем только если у клиента РОВНО ОДНА открытая сделка. Если их нет
+ * или несколько — не угадываем: сообщение остаётся без привязки.
  */
 export const findIncomingTarget = async (chatId: string): Promise<string> => {
-  const targets = rowsOf(
+  const deals = await openDealsOfChat(chatId);
+
+  if (deals.length !== 1) return '';
+
+  const deal = deals[0];
+
+  if (!deal.recordId) return '';
+
+  const existing = rowsOf(
     await client.get<unknown>('/rest/chatTargets', {
-      query: { filter: `chatId[eq]:"${chatId}"`, limit: 10 },
+      query: {
+        filter: `chatId[eq]:"${chatId}",${deal.field}[eq]:"${deal.recordId}"`,
+        select: 'id',
+        limit: 1,
+      },
     }),
     'chatTargets',
+  )[0];
+
+  if (existing?.id) return String(existing.id);
+
+  // Связки ещё нет — создаём: без неё сообщению не к чему привязываться.
+  const created = pickCreated(
+    await client.post<unknown>('/rest/chatTargets', {
+      name: `Переписка · ${deal.label}`,
+      chatId,
+      [deal.field]: deal.recordId,
+    }),
   );
 
-  if (targets.length === 0) return '';
-  if (targets.length === 1) return String(targets[0].id ?? '');
-
-  const sent = rowsOf(
-    await client.get<unknown>('/rest/soobshcheniya', {
-      query: {
-        filter: `chatId[eq]:"${chatId}",napravlenie[eq]:"ISHODYASHCHIE"`,
-        select: 'id,createdAt',
-        limit: 200,
-      },
-    }),
-    'soobshcheniya',
-  );
-
-  const last = sent.reduce<Record<string, unknown> | null>((latest, row) => {
-    if (!latest) return row;
-
-    return String(row.createdAt ?? '') > String(latest.createdAt ?? '') ? row : latest;
-  }, null);
-
-  if (!last?.id) return '';
-
-  const links = rowsOf(
-    await client.get<unknown>('/rest/svyaziSoobshcheniya', {
-      query: {
-        filter: `soobshchenieId[eq]:"${String(last.id)}"`,
-        select: 'id,svyazkaChatovId',
-        limit: 10,
-      },
-    }),
-    'svyaziSoobshcheniya',
-  ).filter((link) => targets.some((target) => String(target.id) === String(link.svyazkaChatovId)));
-
-  return links.length > 0 ? String(links[0].svyazkaChatovId ?? '') : '';
+  return String(created?.id ?? '');
 };
 
 /** Карточка диалога: последнее сообщение, время, счётчик непрочитанных. */
