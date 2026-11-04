@@ -85,7 +85,10 @@ const extract = (record: Record<string, unknown> | undefined) => {
  * Нужны для режима «По сделкам»: список показывает не клиентов, а записи,
  * у которых есть переписка, с последним сообщением.
  */
-export const dealThreads = async (client: RestApiClient): Promise<DealThread[]> => {
+export const dealThreads = async (
+  client: RestApiClient,
+  memberId: string,
+): Promise<DealThread[]> => {
   const links = await readAllRows({
     client,
     path: '/rest/svyaziSoobshcheniya',
@@ -105,13 +108,56 @@ export const dealThreads = async (client: RestApiClient): Promise<DealThread[]> 
     const body = await client.get<unknown>('/rest/soobshcheniya', {
       query: {
         filter: `id[in]:[${chunk.map((id) => `"${id}"`).join(',')}]`,
-        select: 'id,chatId,tekst,createdAt',
+        select: 'id,chatId,tekst,createdAt,avtorId',
         limit: 200,
       },
     });
 
     for (const row of rowsOf(body, 'soobshcheniya')) {
       messages.set(String(row.id ?? ''), row);
+    }
+  }
+
+  // Чаты, владелец канала которых — текущий сотрудник: всё, что пришло в его
+  // канал, тоже его участие, даже если автор у входящего не записан.
+  const chatIds = [...new Set([...messages.values()].map((row) => String(row.chatId ?? '')).filter(Boolean))];
+  const ownedChats = new Set<string>();
+
+  for (const chunk of chunks(chatIds, 200)) {
+    const chatsBody = await client.get<unknown>('/rest/chats', {
+      query: {
+        filter: `id[in]:[${chunk.map((id) => `"${id}"`).join(',')}]`,
+        select: 'id,shlyuzId',
+        limit: 200,
+      },
+    });
+
+    const gatewayIds = [
+      ...new Set(
+        rowsOf(chatsBody, 'chats')
+          .map((row) => String(row.shlyuzId ?? ''))
+          .filter(Boolean),
+      ),
+    ];
+
+    if (gatewayIds.length === 0) continue;
+
+    const gatewaysBody = await client.get<unknown>('/rest/smsGateways', {
+      query: {
+        filter: `id[in]:[${gatewayIds.map((id) => `"${id}"`).join(',')}]`,
+        select: 'id,sotrudnikId',
+        limit: 200,
+      },
+    });
+
+    const mine = new Set(
+      rowsOf(gatewaysBody, 'smsGateways')
+        .filter((row) => String(row.sotrudnikId ?? '') === memberId)
+        .map((row) => String(row.id ?? '')),
+    );
+
+    for (const row of rowsOf(chatsBody, 'chats')) {
+      if (mine.has(String(row.shlyuzId ?? ''))) ownedChats.add(String(row.id ?? ''));
     }
   }
 
@@ -176,6 +222,13 @@ export const dealThreads = async (client: RestApiClient): Promise<DealThread[]> 
     const parsed = extract(target);
 
     if (!message || !parsed || !targetId) continue;
+
+    // Показываем только переписки, в которых участвовал текущий сотрудник:
+    // либо писал сам, либо это входящие в его канал.
+    const mine =
+      String(message.avtorId ?? '') === memberId || ownedChats.has(String(message.chatId ?? ''));
+
+    if (!mine) continue;
 
     const chatId = String(message.chatId ?? '');
     const createdAt = String(message.createdAt ?? '');

@@ -248,21 +248,55 @@ export const saveIncoming = async (params: {
 };
 
 /**
- * Связка диалога со сделкой, если она одна.
+ * К какой сделке отнести входящее сообщение клиента.
  *
- * Клиент пишет сам, вне карточки — контекста нет. Если у диалога ровно одна
- * сделка, ошибки не будет: относим входящее к ней. Если сделок несколько —
- * не гадаем, сообщение остаётся без привязки (привяжется ответом из карточки).
+ * Клиент пишет сам, вне карточки — контекста нет. Одна связка у диалога —
+ * относим к ней. Если связок несколько (клиент писал по разным сделкам),
+ * берём ту, по которой шла последняя отправка из этого диалога: клиент
+ * отвечает на последнее письмо менеджера. Нет отправок — не гадаем.
  */
-export const findSoleTarget = async (chatId: string): Promise<string> => {
-  const rows = rowsOf(
+export const findIncomingTarget = async (chatId: string): Promise<string> => {
+  const targets = rowsOf(
     await client.get<unknown>('/rest/chatTargets', {
-      query: { filter: `chatId[eq]:"${chatId}"`, limit: 3 },
+      query: { filter: `chatId[eq]:"${chatId}"`, limit: 10 },
     }),
     'chatTargets',
   );
 
-  return rows.length === 1 ? String(rows[0].id ?? '') : '';
+  if (targets.length === 0) return '';
+  if (targets.length === 1) return String(targets[0].id ?? '');
+
+  const sent = rowsOf(
+    await client.get<unknown>('/rest/soobshcheniya', {
+      query: {
+        filter: `chatId[eq]:"${chatId}",napravlenie[eq]:"ISHODYASHCHIE"`,
+        select: 'id,createdAt',
+        limit: 200,
+      },
+    }),
+    'soobshcheniya',
+  );
+
+  const last = sent.reduce<Record<string, unknown> | null>((latest, row) => {
+    if (!latest) return row;
+
+    return String(row.createdAt ?? '') > String(latest.createdAt ?? '') ? row : latest;
+  }, null);
+
+  if (!last?.id) return '';
+
+  const links = rowsOf(
+    await client.get<unknown>('/rest/svyaziSoobshcheniya', {
+      query: {
+        filter: `soobshchenieId[eq]:"${String(last.id)}"`,
+        select: 'id,svyazkaChatovId',
+        limit: 10,
+      },
+    }),
+    'svyaziSoobshcheniya',
+  ).filter((link) => targets.some((target) => String(target.id) === String(link.svyazkaChatovId)));
+
+  return links.length > 0 ? String(links[0].svyazkaChatovId ?? '') : '';
 };
 
 /** Карточка диалога: последнее сообщение, время, счётчик непрочитанных. */

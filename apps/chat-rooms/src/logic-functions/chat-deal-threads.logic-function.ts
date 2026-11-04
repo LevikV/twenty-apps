@@ -21,7 +21,10 @@ const handler = async (_event: RoutePayload, context: LogicFunctionExecutionCont
   if (!context.workspaceMemberId) return json({ error: 'Нужна авторизация' }, 401);
 
   try {
-    const threads = await dealThreads(new RestApiClient({ runAs: 'application' }));
+    const threads = await dealThreads(
+      new RestApiClient({ runAs: 'application' }),
+      context.workspaceMemberId,
+    );
 
     return json({ threads });
   } catch (error) {

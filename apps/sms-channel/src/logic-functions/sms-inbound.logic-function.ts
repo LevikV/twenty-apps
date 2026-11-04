@@ -9,7 +9,7 @@ import {
   ensureParticipant,
   findClient,
   findGateway,
-  findSoleTarget,
+  findIncomingTarget,
   readChatUnread,
   saveIncoming,
   touchChat,
@@ -112,7 +112,7 @@ const handler = async (event: RoutePayload) => {
 
     await ensureParticipant(chatId, gateway.memberId);
 
-    const svyazkaId = await findSoleTarget(chatId).catch(() => '');
+    const svyazkaId = await findIncomingTarget(chatId).catch(() => '');
 
     const saved = await saveIncoming({
       chatId,
