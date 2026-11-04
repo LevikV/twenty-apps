@@ -1351,7 +1351,11 @@ const ChatCenter = () => {
             </div>
 
             <div
-              onClick={() => setLinkFor(null)}
+              onClick={(event) => {
+                // Закрываем ввод только при клике по самому фону: в remote-dom
+                // stopPropagation на вложенных кнопках ненадёжен.
+                if (event.target === event.currentTarget) setLinkFor(null);
+              }}
               style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', minHeight: 0 }}
             >
               {visibleMessages.length === 0 && (
@@ -1430,22 +1434,6 @@ const ChatCenter = () => {
                             return (
                               <span
                                 key={linkId}
-                                title={deal ? 'Открыть запись' : ''}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-
-                                  const objectNameSingular = deal?.kind
-                                    ? OBJECT_BY_KIND[deal.kind]
-                                    : '';
-
-                                  if (!objectNameSingular || !deal?.recordId) return;
-
-                                  void openSidePanelPage({
-                                    page: SidePanelPages.ViewRecord,
-                                    objectNameSingular,
-                                    recordId: deal.recordId,
-                                  }).catch(() => undefined);
-                                }}
                                 style={{
                                   display: 'inline-flex',
                                   alignItems: 'center',
@@ -1456,18 +1444,34 @@ const ChatCenter = () => {
                                   borderRadius: '10px',
                                   padding: '1px 6px',
                                   fontSize: '10px',
-                                  cursor: deal?.recordId ? 'pointer' : 'default',
                                 }}
                               >
-                                {deal
-                                  ? `${LINK_KIND_LABEL[deal.kind ?? ''] ?? ''} ${deal.name}`.trim()
-                                  : 'Запись'}
+                                <span
+                                  title={deal ? 'Открыть запись' : ''}
+                                  onClick={() => {
+                                    const objectNameSingular = deal?.kind
+                                      ? OBJECT_BY_KIND[deal.kind]
+                                      : '';
+
+                                    if (!objectNameSingular || !deal?.recordId) return;
+
+                                    void openSidePanelPage({
+                                      page: SidePanelPages.ViewRecord,
+                                      objectNameSingular,
+                                      recordId: deal.recordId,
+                                    }).catch(() => undefined);
+                                  }}
+                                  style={{ cursor: deal?.recordId ? 'pointer' : 'default' }}
+                                >
+                                  {deal
+                                    ? `${LINK_KIND_LABEL[deal.kind ?? ''] ?? ''} ${deal.name}`.trim()
+                                    : 'Запись'}
+                                </span>
                                 <button
                                   type="button"
                                   title="Снять связь"
                                   disabled={linkBusy}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
+                                  onClick={() => {
                                     void changeLink('remove', {
                                       messageId: message.id,
                                       targetId: linkId,
