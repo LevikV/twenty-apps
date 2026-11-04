@@ -49,11 +49,22 @@ type Message = {
   svyazkaIds?: string[];
 };
 
+type DealThreadView = {
+  targetId: string;
+  chatId: string;
+  kind: string;
+  recordId: string;
+  name: string;
+  lastMessage: string;
+  lastAt: string;
+};
+
 type LinkResult = {
   kind: string;
   recordId: string;
   title: string;
   label: string;
+  subtitle?: string;
 };
 
 /** Имя объекта Twenty для открытия записи из лейбла. */
@@ -261,6 +272,10 @@ const ChatCenter = () => {
   // Фильтры клиентской ленты: поиск по клиенту, канал и сделка.
   const [dialogSearch, setDialogSearch] = useState('');
   const [channelFilter, setChannelFilter] = useState<string>('all');
+  // Режим «По сделкам»: в списке не клиенты, а записи, у которых есть переписка.
+  const [dealsOnly, setDealsOnly] = useState(false);
+  const [dealThreads, setDealThreads] = useState<DealThreadView[]>([]);
+  const [dealThreadsLoading, setDealThreadsLoading] = useState(false);
   const [dealFilter, setDealFilter] = useState<string>('all');
   const [threadDeals, setThreadDeals] = useState<
     { id: string; name: string; count: number; kind?: string; recordId?: string }[]
@@ -806,6 +821,31 @@ const ChatCenter = () => {
     void loadThreadDeals(activeChatId);
   }, [activeChatId, activeChat?.tip, loadThreadDeals]);
 
+  // Режим «По сделкам»: список собирается по связям сообщений, поэтому грузим
+  // его при включении, а не держим в общем ответе диалогов.
+  useEffect(() => {
+    if (!dealsOnly) return;
+
+    let alive = true;
+
+    setDealThreadsLoading(true);
+
+    void callRoute<{ threads: DealThreadView[] }>('/chat-deal-threads')
+      .then((result) => {
+        if (alive) setDealThreads(result.threads ?? []);
+      })
+      .catch(() => {
+        if (alive) setDealThreads([]);
+      })
+      .finally(() => {
+        if (alive) setDealThreadsLoading(false);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [dealsOnly]);
+
   // Поиск записи для привязки — с задержкой, чтобы не дёргать сервер на каждую букву.
   useEffect(() => {
     if (!linkFor) return;
@@ -877,6 +917,10 @@ const ChatCenter = () => {
       : showAllChats
         ? dialogs.filter((dialog) => dialog.tip !== 'KLIENT')
         : dialogs.filter((dialog) => dialog.tip === 'LICHNY');
+
+  const visibleDealThreads = dealThreads.filter(
+    (thread) => searchValue.length === 0 || (thread.name ?? '').toLowerCase().includes(searchValue),
+  );
 
   if (isLoading) {
     return <div style={{ padding: '24px', color: '#888' }}>Загружаю диалоги…</div>;
@@ -988,6 +1032,29 @@ const ChatCenter = () => {
                 background: '#fff',
               }}
             />
+
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '12px',
+                color: '#555',
+                cursor: 'pointer',
+                userSelect: 'none',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={dealsOnly}
+                onChange={(event) => {
+                  setDealsOnly(event.target.checked);
+                  setDealFilter('all');
+                }}
+                style={{ cursor: 'pointer' }}
+              />
+              По сделкам
+            </label>
 
             {clientChannels.length > 1 && (
               <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
@@ -1160,7 +1227,7 @@ const ChatCenter = () => {
             </div>
           )}
 
-          {!pickerOpen && visibleDialogs.length === 0 && (
+          {!pickerOpen && !(section === 'klienty' && dealsOnly) && visibleDialogs.length === 0 && (
             <div style={{ padding: '16px', fontSize: '13px', color: '#999' }}>
               {dialogs.length === 0
                 ? 'У вас пока нет диалогов'
@@ -1168,7 +1235,91 @@ const ChatCenter = () => {
             </div>
           )}
 
+          {!pickerOpen && section === 'klienty' && dealsOnly && dealThreadsLoading && (
+            <div style={{ padding: '16px', fontSize: '12px', color: '#999' }}>Загружаю сделки…</div>
+          )}
+
           {!pickerOpen &&
+            section === 'klienty' &&
+            dealsOnly &&
+            !dealThreadsLoading &&
+            visibleDealThreads.length === 0 && (
+              <div style={{ padding: '16px', fontSize: '12px', color: '#999' }}>
+                Нет сделок с перепиской
+              </div>
+            )}
+
+          {!pickerOpen &&
+            section === 'klienty' &&
+            dealsOnly &&
+            visibleDealThreads.map((thread) => {
+              const isActive = thread.chatId === activeChatId && dealFilter === thread.targetId;
+
+              return (
+                <div
+                  key={thread.targetId}
+                  onClick={() => {
+                    setActiveChatId(thread.chatId);
+                    setDealFilter(thread.targetId);
+                  }}
+                  style={{
+                    padding: '10px 16px',
+                    cursor: 'pointer',
+                    background: isActive ? '#ffffff' : 'transparent',
+                    borderLeft: isActive ? '3px solid #1961ff' : '3px solid transparent',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+                    <span
+                      style={{
+                        fontSize: '13px',
+                        fontWeight: 500,
+                        flex: 1,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          marginRight: '6px',
+                          padding: '0 5px',
+                          borderRadius: '4px',
+                          background: '#eef3ff',
+                          color: '#1961ff',
+                          fontSize: '10px',
+                          fontWeight: 600,
+                          verticalAlign: 'middle',
+                        }}
+                      >
+                        {LINK_KIND_LABEL[thread.kind] ?? thread.kind}
+                      </span>
+                      {thread.name || 'Без названия'}
+                    </span>
+                    <span style={{ fontSize: '11px', color: '#aaa' }}>
+                      {formatDay(thread.lastAt)}
+                    </span>
+                  </div>
+
+                  <div
+                    style={{
+                      fontSize: '12px',
+                      color: '#999',
+                      marginTop: '2px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {thread.lastMessage || '—'}
+                  </div>
+                </div>
+              );
+            })}
+
+          {!pickerOpen &&
+            !(section === 'klienty' && dealsOnly) &&
             visibleDialogs.map((dialog) => {
             const isActive = dialog.id === activeChatId;
 
@@ -1350,14 +1501,7 @@ const ChatCenter = () => {
               </span>
             </div>
 
-            <div
-              onClick={(event) => {
-                // Закрываем ввод только при клике по самому фону: в remote-dom
-                // stopPropagation на вложенных кнопках ненадёжен.
-                if (event.target === event.currentTarget) setLinkFor(null);
-              }}
-              style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', minHeight: 0 }}
-            >
+            <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', minHeight: 0 }}>
               {visibleMessages.length === 0 && (
                 <div style={{ fontSize: '13px', color: '#999' }}>
                   Сообщений пока нет — напишите первым
@@ -1498,20 +1642,41 @@ const ChatCenter = () => {
                               onClick={(event) => event.stopPropagation()}
                               style={{ display: 'inline-flex', flexDirection: 'column', gap: '2px' }}
                             >
-                              <input
-                                autoFocus
-                                value={linkQuery}
-                                onChange={(event) => setLinkQuery(event.target.value)}
-                                placeholder="номер или название"
-                                style={{
-                                  width: '190px',
-                                  fontSize: '11px',
-                                  padding: '2px 6px',
-                                  border: '1px solid #cddcff',
-                                  borderRadius: '8px',
-                                  outline: 'none',
-                                }}
-                              />
+                              <span style={{ display: 'inline-flex', gap: '2px' }}>
+                                <input
+                                  autoFocus
+                                  value={linkQuery}
+                                  onChange={(event) => setLinkQuery(event.target.value)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === 'Escape') setLinkFor(null);
+                                  }}
+                                  placeholder="номер или название"
+                                  style={{
+                                    width: '190px',
+                                    fontSize: '11px',
+                                    padding: '2px 6px',
+                                    border: '1px solid #cddcff',
+                                    borderRadius: '8px',
+                                    outline: 'none',
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  title="Закрыть"
+                                  onClick={() => setLinkFor(null)}
+                                  style={{
+                                    border: '1px solid #cddcff',
+                                    background: '#fff',
+                                    color: '#1961ff',
+                                    borderRadius: '8px',
+                                    padding: '0 6px',
+                                    fontSize: '11px',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  ×
+                                </button>
+                              </span>
                               {linkResults.map((item) => (
                                 <button
                                   key={`${item.kind}:${item.recordId}`}
@@ -1535,6 +1700,7 @@ const ChatCenter = () => {
                                   }}
                                 >
                                   {item.label} · {item.title}
+                                  {item.subtitle ? ` — ${item.subtitle}` : ''}
                                 </button>
                               ))}
                             </span>
