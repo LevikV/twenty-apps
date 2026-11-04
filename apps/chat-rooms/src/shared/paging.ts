@@ -42,7 +42,9 @@ export const readAllRows = async (params: {
   for (;;) {
     const body = await client.get<unknown>(path, {
       query: {
-        filter,
+        // Пустая строка фильтра — не «без фильтра», а ошибка разбора: сервер
+        // отвечает «'filter' invalid for 'and()'». Поэтому не передаём его вовсе.
+        ...(filter ? { filter } : {}),
         select,
         limit: pageSize,
         ...(cursor ? { starting_after: cursor } : {}),

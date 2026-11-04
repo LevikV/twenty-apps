@@ -165,7 +165,9 @@ export const dealThreads = async (client: RestApiClient): Promise<DealThread[]> 
     }
   }
 
-  const byTarget = new Map<string, DealThread>();
+  // Группируем по самой сделке, а не по связке: у одной записи может быть
+  // несколько переписок (разные номера клиента), в списке она должна быть одна.
+  const byRecord = new Map<string, DealThread>();
 
   for (const link of links) {
     const targetId = String(link.svyazkaChatovId ?? '');
@@ -177,11 +179,12 @@ export const dealThreads = async (client: RestApiClient): Promise<DealThread[]> 
 
     const chatId = String(message.chatId ?? '');
     const createdAt = String(message.createdAt ?? '');
-    const existing = byTarget.get(targetId);
+    const key = `${parsed.kind}:${parsed.recordId}`;
+    const existing = byRecord.get(key);
 
     if (existing && existing.lastAt >= createdAt) continue;
 
-    byTarget.set(targetId, {
+    byRecord.set(key, {
       targetId,
       chatId,
       kind: parsed.kind,
@@ -192,5 +195,5 @@ export const dealThreads = async (client: RestApiClient): Promise<DealThread[]> 
     });
   }
 
-  return [...byTarget.values()].sort((left, right) => (left.lastAt < right.lastAt ? 1 : -1));
+  return [...byRecord.values()].sort((left, right) => (left.lastAt < right.lastAt ? 1 : -1));
 };
