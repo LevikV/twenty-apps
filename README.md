@@ -1,36 +1,61 @@
-# Twenty Apps — Монорепо приложений Kplus79
+# Twenty Apps — монорепо приложений Kplus79
 
 Приложения на Twenty TypeScript SDK для CRM https://crm.kplus79.ru.
+
+Приложение — это не «плагин в браузере»: объекты, поля, логик-функции, права,
+навигация и фронт-компоненты накатываются в workspace и живут там.
 
 ## Структура
 
 ```
 twenty-apps/
-├── apps/                    # отдельные приложения
-│   ├── telefon/             # телефония (ВАТС Мегафон)
-│   ├── call-widget/         # виджет звонков
-│   └── ...                  # будущие приложения
-├── shared/                  # общие утилиты, типы, компоненты
+├── apps/
+│   ├── chat-rooms/             # «Центр коммуникации»: чаты, сообщения, вложения
+│   ├── exchange-1c/            # обмен с 1С: справочники, сделки, ремонты
+│   ├── max-channel/            # канал MAX: приём, отправка, очередь
+│   ├── megafon-telephony/      # телефония МегаФон: звонки, записи, обработчики
+│   ├── profit-widget/          # виджет прибыли: наценка и фактический учёт
+│   ├── record-rules/           # правила записи: заморозка закрытых стадий и т.п.
+│   ├── relation-cards-widget/  # карточки связанных записей
+│   └── sms-channel/            # канал SMS: приём, пуш со ссылкой на диалог
 └── README.md
 ```
 
-## Быстрый старт
+Внутри приложения одинаковая раскладка: `application-config.ts` (имя, описание, роли),
+`logic-functions/` (серверный код), `front-components/` (UI), `objects/` и `fields/`
+(схема), `navigation-menu-items/`, `page-layouts/`, `shared/`.
+
+## Что важно знать
+
+- **`logic-functions` — это серверный код Twenty.** Он компилируется в `.mjs` и
+  хранится в БД workspace; исходник — только здесь.
+- **Фронт-компоненты собираются в бандл ядра.** Правка компонента видна в UI только
+  после пересборки образа (`twenty-fork/scripts/release.sh`), а не после `apply`.
+- **`.twenty/` — рабочий каталог SDK** (`output/`, `dist/`), в git не попадает.
+- **API-ключ** для `apply` берётся из конфигурации Twenty CLI, в репозитории его нет.
+
+## Деплой
 
 ```bash
-# Создать новое приложение
-cd apps
-npx create-twenty-app@latest my-app --url https://crm.kplus79.ru --display-name "My App"
-
-# Деплой
-cd my-app
-yarn twenty remote:add --url https://crm.kplus79.ru --api-key <key>
-yarn twenty apply
-yarn twenty dev        # watch mode
+cd apps/<имя>
+export HOME=/root/.hermes/profiles/crm-builder/home   # git и yarn twenty — из профиля
+yarn twenty apply                                     # накатить в CRM
+yarn twenty dev                                       # watch-режим
 ```
 
-## Приложения
+`apply` идемпотентен: повторный запуск обновляет существующие объекты и функции.
 
-| Приложение | Тип | Статус |
-|---|---|---|
-| `telefon` | App | Планируется |
-| `call-widget` | Front Component | Планируется |
+## Правила
+
+1. Рабочее дерево держим чистым: закончил доработку — коммит и push.
+2. Коммитим только файлы доработки (без `yarn.lock`, `dist-*`, `.twenty/`).
+3. Секретов в коде нет — ключи и токены только на сервере.
+4. Перед правкой схемы (объекты, поля, опции) — согласовать: изменения затрагивают
+   боевые данные.
+
+## Смежные репозитории
+
+| Что | Репозиторий |
+|---|---|
+| Патчи ядра, Docker, nginx, compose, снимки, сборка | `LevikV/twenty-fork` |
+| Мост MAX, SMS-шлюз, импорт 1С, скрипты Ревизора | `LevikV/kplus-scripts` |
