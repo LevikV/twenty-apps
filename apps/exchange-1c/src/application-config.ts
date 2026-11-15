@@ -25,7 +25,9 @@ export default defineApplication({
       label: 'Задач за прогон',
       description: 'Сколько задач очереди обрабатывать за один запуск (лимит API)',
       type: FieldType.NUMBER,
-      value: 20,
+      // Временно поднято: залипшие задачи занимали всю квоту и не пускали новые.
+      // После разбора очереди вернуть 20.
+      value: 300,
     },
     [SETTING_KEYS.stuckMinutes]: {
       universalIdentifier: STUCK_MINUTES_VARIABLE_UNIVERSAL_IDENTIFIER,
