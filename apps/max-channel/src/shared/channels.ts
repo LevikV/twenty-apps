@@ -1,0 +1,281 @@
+import { RestApiClient } from 'twenty-client-sdk/rest';
+
+import { rowsOf } from 'src/shared/crm';
+
+/**
+ * Мои каналы: самообслуживание подключения телефона.
+ *
+ * Сотрудник ставит приложение SMS-шлюза на свой телефон, оно регистрируется на
+ * приватном сервере и показывает логин и пароль устройства. Эти данные вводим
+ * в карточке «Мои каналы» — по ним проверяем связь и заводим запись шлюза.
+ *
+ * Номер телефона не спрашиваем и по API не читаем: сервер отдаёт его
+ * замаскированным. Рабочий номер берём из должности сотрудника — то же правило,
+ * что у телефонии: клиентские SMS идут с рабочего номера, не с личного.
+ */
+
+type Row = Record<string, unknown> & { id?: string };
+
+/** Адрес приватного сервера шлюза этой установки. */
+export const GATEWAY_API = 'https://crm.kplus79.ru/integrations/sms/api';
+
+const client = new RestApiClient({ runAs: 'application' });
+
+const basic = (login: string, parol: string): string =>
+  `Basic ${Buffer.from(`${login}:${parol}`).toString('base64')}`;
+
+export type DeviceCheck =
+  | { ok: true; deviceId: string; model: string; online: boolean }
+  | { ok: false; error: string };
+
+/** Проверка учётки устройства: жив ли сервер и подходят ли логин с паролем. */
+export const checkDevice = async (login: string, parol: string): Promise<DeviceCheck> => {
+  try {
+    const response = await fetch(`${GATEWAY_API}/3rdparty/v1/devices`, {
+      headers: { Authorization: basic(login, parol) },
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      return { ok: false, error: 'Неверный логин или пароль устройства' };
+    }
+
+    if (!response.ok) {
+      return { ok: false, error: `Сервер шлюза ответил HTTP ${response.status}` };
+    }
+
+    const devices = (await response.json()) as Row[];
+    const device = Array.isArray(devices) ? devices[0] : undefined;
+
+    if (!device?.id) return { ok: false, error: 'У устройства нет идентификатора' };
+
+    const lastSeen = String(device.lastSeen ?? '');
+    const online = !!lastSeen && Date.now() - Date.parse(lastSeen) < 10 * 60 * 1000;
+
+    return {
+      ok: true,
+      deviceId: String(device.id),
+      model: String(device.name ?? ''),
+      online,
+    };
+  } catch (error) {
+    return { ok: false, error: `Сервер шлюза недоступен: ${String(error).slice(0, 150)}` };
+  }
+};
+
+/** Рабочий номер сотрудника: пользователь CRM → карточка → должность → номер. */
+export const workPhoneOf = async (memberId: string): Promise<string> => {
+  const memberResponse = (await client.get<unknown>(`/rest/workspaceMembers/${memberId}`, {
+    query: { select: 'id,sotrudnikId' },
+  })) as { data?: { workspaceMember?: Row } };
+
+  const employeeId = String(memberResponse?.data?.workspaceMember?.sotrudnikId ?? '');
+
+  if (!employeeId) return '';
+
+  const employeeResponse = (await client.get<unknown>(`/rest/sotrudniki/${employeeId}`, {
+    query: { select: 'id,dolzhnostId' },
+  })) as { data?: { sotrudnik?: Row } };
+
+  const positionId = String(employeeResponse?.data?.sotrudnik?.dolzhnostId ?? '');
+
+  if (!positionId) return '';
+
+  const positionResponse = (await client.get<unknown>(`/rest/positions/${positionId}`, {
+    query: { select: 'id,workPhone' },
+  })) as { data?: { position?: Row } };
+
+  const phones = positionResponse?.data?.position?.workPhone as
+    | { primaryPhoneNumber?: string; primaryPhoneCallingCode?: string }
+    | undefined;
+
+  const digits = String(phones?.primaryPhoneNumber ?? '').replace(/\D/g, '');
+
+  return digits;
+};
+
+/** Шлюзы сотрудника — то, что он видит в «Моих каналах». */
+export const myChannels = async (memberId: string): Promise<Row[]> => {
+  const response = await client.get<unknown>('/rest/smsGateways', {
+    query: {
+      filter: `and(sotrudnikId[eq]:"${memberId}",deviceId[is]:NOT_NULL)`,
+      select: 'id,name,nomer,status,deviceId,login,posledniyKontakt,limitVChas',
+      limit: 20,
+      orderBy: 'createdAt',
+    },
+  });
+
+  return rowsOf(response, 'smsGateways');
+};
+
+/** Подключение: проверяем устройство и заводим (или обновляем) запись шлюза. */
+export const connectChannel = async (
+  memberId: string,
+  login: string,
+  parol: string,
+  manualPhone?: string,
+): Promise<{ ok: boolean; error?: string; gatewayId?: string; created?: boolean; nomer?: string }> => {
+  const cleanLogin = login.trim();
+  const cleanParol = parol.trim();
+
+  if (!cleanLogin || !cleanParol) return { ok: false, error: 'Заполните логин и пароль устройства' };
+
+  const check = await checkDevice(cleanLogin, cleanParol);
+
+  if (!check.ok) return { ok: false, error: check.error };
+
+  // Номер: введённый вручную важнее номера должности — у сотрудника может быть
+  // вторая симка. Пустое поле — берём рабочий номер должности.
+  const manual = normalizePhone(manualPhone);
+  const nomer = manual || (await workPhoneOf(memberId));
+
+  if (!nomer) {
+    return {
+      ok: false,
+      error: 'У вашей должности не заполнен рабочий номер — укажите номер вручную',
+    };
+  }
+
+  const busy = await numberOwner(nomer, check.deviceId);
+
+  if (busy) {
+    return {
+      ok: false,
+      error:
+        busy === memberId
+          ? 'Этот номер уже подключён на другом устройстве'
+          : 'Этот номер уже подключён другим сотрудником',
+    };
+  }
+
+  const existing = rowsOf(
+    await client.get<unknown>('/rest/smsGateways', {
+      query: { filter: `deviceId[eq]:"${check.deviceId}"`, limit: 1 },
+    }),
+    'smsGateways',
+  )[0];
+
+  const patch = {
+    sotrudnikId: memberId,
+    // Поле типа «Телефон» принимает объект, не строку.
+    nomer: { primaryPhoneNumber: nomer, primaryPhoneCallingCode: '+7' },
+    login: cleanLogin,
+    parol: cleanParol,
+    deviceId: check.deviceId,
+    status: check.online ? 'NA_SVYAZI' : 'NET_SVYAZI',
+    adresServera: `${GATEWAY_API}/mobile/v1`,
+    posledniyKontakt: new Date().toISOString(),
+  };
+
+  if (existing?.id) {
+    await client.patch<unknown>(`/rest/smsGateways/${String(existing.id)}`, patch);
+
+    return { ok: true, gatewayId: String(existing.id), created: false, nomer };
+  }
+
+  const created = rowsOf(
+    await client.post<unknown>('/rest/smsGateways', {
+      name: `${check.model || 'Телефон'} — мой канал`,
+      ...patch,
+    }),
+    'smsGateways',
+  )[0];
+
+  return { ok: true, gatewayId: String(created?.id ?? ''), created: true, nomer };
+};
+
+/**
+ * Отключение канала.
+ *
+ * Устройство отзываем на сервере шлюза — оно перестаёт отправлять и принимать
+ * SMS. Учётные данные и `deviceId` в карточке очищаем, номер остаётся: история
+ * переписки и привязки к сделкам сохраняются.
+ */
+export const disconnectChannel = async (
+  memberId: string,
+  gatewayId: string,
+): Promise<{ ok: boolean; error?: string }> => {
+  const response = (await client.get<unknown>(`/rest/smsGateways/${gatewayId}`, {
+    query: { select: 'id,name,sotrudnikId,login,parol,deviceId' },
+  })) as { data?: { smsGateway?: Row } };
+
+  const row = response?.data?.smsGateway;
+
+  if (!row?.id) return { ok: false, error: 'Канал не найден' };
+
+  if (String(row.sotrudnikId ?? '') !== memberId) {
+    return { ok: false, error: 'Это не ваш канал — отключить может только владелец' };
+  }
+
+  const deviceId = String(row.deviceId ?? '');
+  const login = String(row.login ?? '');
+  const parol = String(row.parol ?? '');
+
+  if (deviceId && login && parol) {
+    try {
+      const removed = await fetch(`${GATEWAY_API}/3rdparty/v1/devices/${deviceId}`, {
+        method: 'DELETE',
+        headers: { Authorization: basic(login, parol) },
+      });
+
+      // 404 — устройство уже удалено вручную: это не ошибка для нас.
+      if (!removed.ok && removed.status !== 404) {
+        return { ok: false, error: `Сервер шлюза отказал: HTTP ${removed.status}` };
+      }
+    } catch (error) {
+      return { ok: false, error: `Сервер шлюза недоступен: ${String(error).slice(0, 120)}` };
+    }
+  }
+
+  await client.patch<unknown>(`/rest/smsGateways/${gatewayId}`, {
+    deviceId: '',
+    login: '',
+    parol: '',
+    status: 'NET_SVYAZI',
+  });
+
+  return { ok: true };
+};
+
+/** Приводим номер к 10 цифрам: +7 924 747-01-69 → 9247470169. */
+export const normalizePhone = (value?: string): string => {
+  const digits = String(value ?? '').replace(/\D/g, '');
+
+  if (digits.length === 11 && digits.startsWith('7')) return digits.slice(1);
+  if (digits.length === 11 && digits.startsWith('8')) return digits.slice(1);
+
+  return digits.length === 10 ? digits : '';
+};
+
+const phoneOf = (value: unknown): string => {
+  if (value && typeof value === 'object') {
+    return String((value as { primaryPhoneNumber?: string }).primaryPhoneNumber ?? '').replace(/\D/g, '');
+  }
+
+  return String(value ?? '').replace(/\D/g, '');
+};
+
+/** Чей это номер: пусто — свободен, иначе id сотрудника-владельца. */
+const numberOwner = async (nomer: string, ownDeviceId: string): Promise<string> => {
+  const rows = rowsOf(
+    await client.get<unknown>('/rest/smsGateways', {
+      query: { select: 'id,nomer,deviceId,sotrudnikId', limit: 100 },
+    }),
+    'smsGateways',
+  );
+
+  const taken = rows.find(
+    (row) => phoneOf(row.nomer) === nomer && String(row.deviceId ?? '') !== ownDeviceId,
+  );
+
+  return taken ? String(taken.sotrudnikId ?? 'занят') : '';
+};
+
+/** Данные для инструкции в интерфейсе. */
+export const channelInfo = (): { serverAddress: string; privateToken: string } => {
+  const env = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+
+  return {
+    serverAddress: `${GATEWAY_API}/mobile/v1`,
+    privateToken: String(env.SMS_GATEWAY_PRIVATE_TOKEN ?? ''),
+  };
+};
