@@ -2,6 +2,10 @@ export const APP_DISPLAY_NAME = 'Центр коммуникации';
 export const APP_DESCRIPTION = 'Комнаты по сделкам, участники и упоминания в чате';
 export const APPLICATION_UNIVERSAL_IDENTIFIER = 'ba8e78bf-18fe-4fad-84a1-921706d6c964';
 export const DEFAULT_ROLE_UNIVERSAL_IDENTIFIER = '4921e5d9-761d-48f9-bca7-4ca492b1fb14';
+
+/** Настройка: кто может отправлять с каналов других сотрудников (email через запятую). */
+export const CHANNELS_ADMIN_EMAILS_VARIABLE_UNIVERSAL_IDENTIFIER =
+  'fda6aa6d-52a5-4d28-b19f-60b7aecc293e';
 export const MAIN_PAGE_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =
   'a9dce36d-311b-4fcd-bf2d-339ed2c1da54';
 export const MAIN_PAGE_LAYOUT_UNIVERSAL_IDENTIFIER = 'be692204-8b52-4684-8d4e-a716fa580293';
@@ -27,6 +31,12 @@ export const CHAT_MESSAGES_FUNCTION_UNIVERSAL_IDENTIFIER =
   'c7d172f8-a8d6-45fa-9e5c-8c3e98ddf123';
 export const CHAT_SEND_FUNCTION_UNIVERSAL_IDENTIFIER =
   '63fc3bb7-1340-47a5-a269-1ed01c9c5d09';
+export const CHAT_UPLOAD_FUNCTION_UNIVERSAL_IDENTIFIER =
+  '4cdd5653-bb04-4273-af32-11045a9bda4e';
+
+/** Одноразовый пропуск для окна прикрепления файла. */
+export const CHAT_UPLOAD_TICKET_FUNCTION_UNIVERSAL_IDENTIFIER =
+  '7a2e690a-b524-487d-add0-3d1e0ae08252';
 export const CHAT_PRESENCE_FUNCTION_UNIVERSAL_IDENTIFIER =
   '1a869722-3504-4f89-9593-41e674e32725';
 
@@ -42,6 +52,10 @@ export const CHAT_RECORD_ROOM_FUNCTION_UNIVERSAL_IDENTIFIER =
   '13f4406f-519b-4a0b-9936-e9ddb0c5efd6';
 export const CHAT_RECORD_SEND_FUNCTION_UNIVERSAL_IDENTIFIER =
   'b7db3a3e-f3d1-4102-bc33-ad1d87bae7eb';
+
+/** Привязка присланного файла к записи сделки. */
+export const CHAT_RECORD_ATTACH_FUNCTION_UNIVERSAL_IDENTIFIER =
+  '3a966940-26a2-422f-a68a-84af4d2a1561';
 
 // Фронт-компонент чата в карточке записи.
 export const CARD_CHAT_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER =

@@ -35,6 +35,13 @@ export const isAdmin = async (memberId: string): Promise<boolean> => {
   }
 };
 
+/** Кто может управлять связями: почта из настройки приложения (та же, что для чужих каналов). */
+const channelAdmins = (): string[] =>
+  String(process.env.CHANNELS_ADMIN_EMAILS ?? '')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+
 const rest = () => new RestApiClient({ runAs: 'application' });
 
 const recordOf = (body: unknown, key: string): Record<string, unknown> | null => {
@@ -61,14 +68,47 @@ export const canManageMessage = async (params: {
   if (authorId && authorId === memberId) return true;
   if (await isAdmin(memberId)) return true;
 
+  // Резервная проверка админа по настройке приложения: метаданные ролей
+  // доступны не всегда, а без этого клик по сделке молча получал 403.
+  try {
+    const record = recordOf(
+      await rest().get<unknown>(`/rest/workspaceMembers/${memberId}`, {
+        query: { select: 'id,userEmail' },
+      }),
+      'workspaceMember',
+    );
+    const email = String(record?.userEmail ?? '').toLowerCase();
+
+    if (email && channelAdmins().includes(email)) return true;
+  } catch {
+    // ниже проверим владельца канала
+  }
+
   if (!chatId) return false;
 
   try {
     const client = rest();
     const chat = recordOf(
-      await client.get<unknown>(`/rest/chats/${chatId}`, { query: { select: 'id,shlyuzId' } }),
+      await client.get<unknown>(`/rest/chats/${chatId}`, {
+        query: { select: 'id,shlyuzId,maxAccountId' },
+      }),
       'chat',
     );
+
+    // MAX: владелец аккаунта тоже распоряжается перепиской, как и владелец SMS-шлюза.
+    const maxId = String(chat?.maxAccountId ?? '');
+
+    if (maxId) {
+      const account = recordOf(
+        await client.get<unknown>(`/rest/maxAccounts/${maxId}`, {
+          query: { select: 'id,sotrudnikId' },
+        }),
+        'maxAccount',
+      );
+
+      if (String(account?.sotrudnikId ?? '') === memberId) return true;
+    }
+
     const gatewayId = String(chat?.shlyuzId ?? '');
 
     if (!gatewayId) return false;

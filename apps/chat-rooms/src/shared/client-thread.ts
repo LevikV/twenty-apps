@@ -106,9 +106,14 @@ export type ClientContact = {
 
 export type ClientChannel = {
   id: string;
+  /** Канал отправки: SMS или MAX. */
+  kind: 'SMS' | 'MAX';
   name: string;
   nomer: string;
   deviceId: string;
+  /** Чей канал: сотрудник, к которому он привязан. */
+  ownerId: string;
+  ownerName: string;
 };
 
 export type DealClient = {
@@ -271,51 +276,129 @@ export const targetsOfDeal = async (deal: DealClient, recordId: string): Promise
     .map((row) => String(row.id ?? ''))
     .filter(Boolean);
 
-/** Каналы сотрудника: через них он может отвечать клиенту. */
+type MemberRow = {
+  id: string;
+  sotrudnikId: string;
+  email: string;
+  name: string;
+};
+
+/** Сотрудники воркспейса: через них каналы привязываются к человеку. */
+const workspacePeople = async (): Promise<MemberRow[]> =>
+  rowsOf(
+    await client.get<unknown>('/rest/workspaceMembers', {
+      query: { select: 'id,userEmail,sotrudnikId,name', limit: 200 },
+    }),
+    'workspaceMembers',
+  ).map((row) => {
+    const name = (row.name ?? {}) as { firstName?: string; lastName?: string };
+
+    return {
+      id: String(row.id ?? ''),
+      sotrudnikId: String(row.sotrudnikId ?? ''),
+      email: String(row.userEmail ?? '').toLowerCase(),
+      name:
+        [name.lastName, name.firstName].filter(Boolean).join(' ').trim() ||
+        String(row.userEmail ?? 'Сотрудник'),
+    };
+  });
+
+/** Кто может отправлять с чужих каналов: список почты в настройках приложения. */
+const channelAdmins = (): string[] =>
+  String(process.env.CHANNELS_ADMIN_EMAILS ?? '')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+
+/**
+ * Каналы, доступные сотруднику для отправки клиенту.
+ *
+ * Свои — SMS-шлюзы и MAX-аккаунты, привязанные к этому сотруднику. Админ
+ * (почта указана в настройках приложения) видит каналы всех сотрудников и может
+ * отправить от чужого имени — клиент увидит номер/аккаунт владельца канала.
+ */
 export const channelsOfMember = async (memberId: string): Promise<ClientChannel[]> => {
-  const rows = rowsOf(
+  const people = await workspacePeople();
+  const me = people.find((item) => item.id === memberId);
+
+  if (!me) return [];
+
+  const admin = channelAdmins().includes(me.email);
+  // В шлюзах и MAX-аккаунтах поле sotrudnikId хранит id участника воркспейса
+  // (а не id записи «Сотрудники») — сопоставляем именно по нему.
+  const owners = admin ? people : [me];
+  const allowed = new Set(owners.map((item) => item.id));
+  const ownerOf = new Map(people.map((item) => [item.id, item]));
+
+  const smsRows = rowsOf(
     await client.get<unknown>('/rest/smsGateways', {
       query: {
-        filter: `sotrudnikId[eq]:"${memberId}"`,
-        select: 'id,name,deviceId,nomerPrimaryPhoneNumber,status',
-        limit: 20,
+        select: 'id,name,deviceId,nomerPrimaryPhoneNumber,status,sotrudnikId',
+        limit: 100,
       },
     }),
     'smsGateways',
   );
 
-  const list = rows
-    .filter((row) => String(row.deviceId ?? ''))
-    .map((row) => ({
-      id: String(row.id ?? ''),
-      name: String(row.name ?? row.nomerPrimaryPhoneNumber ?? 'Канал'),
-      nomer: formatPhone({ phones: { primaryPhoneNumber: row.nomerPrimaryPhoneNumber } }),
-      deviceId: String(row.deviceId ?? ''),
-    }));
-
-  if (list.length > 0) return list;
-
-  // Ответственный по сделке может не иметь своего канала — тогда доступен любой
-  // рабочий, иначе из карточки нельзя ответить вообще.
-  const all = rowsOf(
-    await client.get<unknown>('/rest/smsGateways', {
+  const maxRows = rowsOf(
+    await client.get<unknown>('/rest/maxAccounts', {
       query: {
-        filter: `status[eq]:"NA_SVYAZI"`,
-        select: 'id,name,deviceId,nomerPrimaryPhoneNumber',
-        limit: 20,
+        select: 'id,name,deviceId,nomerPrimaryPhoneNumber,status,sotrudnikId',
+        limit: 100,
       },
     }),
-    'smsGateways',
+    'maxAccounts',
   );
 
-  return all
+  const sms: ClientChannel[] = smsRows
+    .filter((row) => String(row.status ?? '') === 'NA_SVYAZI')
     .filter((row) => String(row.deviceId ?? ''))
-    .map((row) => ({
-      id: String(row.id ?? ''),
-      name: String(row.name ?? row.nomerPrimaryPhoneNumber ?? 'Канал'),
-      nomer: formatPhone({ phones: { primaryPhoneNumber: row.nomerPrimaryPhoneNumber } }),
-      deviceId: String(row.deviceId ?? ''),
-    }));
+    .filter((row) => allowed.has(String(row.sotrudnikId ?? '')))
+    .map((row) => {
+      const owner = ownerOf.get(String(row.sotrudnikId ?? ''));
+
+      return {
+        id: String(row.id ?? ''),
+        kind: 'SMS' as const,
+        name: String(row.name ?? row.nomerPrimaryPhoneNumber ?? 'SMS'),
+        nomer: formatPhone({ phones: { primaryPhoneNumber: row.nomerPrimaryPhoneNumber } }),
+        deviceId: String(row.deviceId ?? ''),
+        ownerId: owner?.id ?? '',
+        ownerName: owner?.name ?? 'Сотрудник',
+      };
+    });
+
+  const max: ClientChannel[] = maxRows
+    .filter((row) => String(row.status ?? '') === 'PODKLUCHEN')
+    .filter((row) => allowed.has(String(row.sotrudnikId ?? '')))
+    .map((row) => {
+      const owner = ownerOf.get(String(row.sotrudnikId ?? ''));
+
+      return {
+        id: String(row.id ?? ''),
+        kind: 'MAX' as const,
+        name: String(row.name ?? 'MAX'),
+        nomer: formatPhone({ phones: { primaryPhoneNumber: row.nomerPrimaryPhoneNumber } }),
+        deviceId: String(row.deviceId ?? ''),
+        ownerId: owner?.id ?? '',
+        ownerName: owner?.name ?? 'Сотрудник',
+      };
+    });
+
+  // Свои каналы — первыми, чтобы в списке по умолчанию был понятный порядок.
+  const own = (item: ClientChannel) => (item.ownerId === memberId ? 0 : 1);
+
+  return [...sms.sort((a, b) => own(a) - own(b)), ...max.sort((a, b) => own(a) - own(b))];
+};
+
+/** Один канал по id — для маршрутов, которым канал передали явно. */
+export const channelById = async (
+  memberId: string,
+  channelId: string,
+): Promise<ClientChannel | null> => {
+  const channels = await channelsOfMember(memberId);
+
+  return channels.find((item) => item.id === channelId) ?? null;
 };
 
 /** Диалог контакта по номеру канала: ищем существующий, иначе создаём. */
@@ -326,6 +409,28 @@ export const ensureChatForContact = async (params: {
   companyId: string | null;
 }): Promise<string> => {
   const { contact, channel, dealName, companyId } = params;
+
+  // MAX: диалог уже должен существовать — собеседника задаёт сам MAX, по номеру
+  // телефона его не создать. Ищем переписку с этим контактом в выбранном аккаунте.
+  if (channel.kind === 'MAX') {
+    const found = rowsOf(
+      await client.get<unknown>('/rest/chats', {
+        query: {
+          filter: `and(kontaktId[eq]:"${contact.personId}",maxAccountId[eq]:"${channel.id}")`,
+          order_by: 'vremyaPoslednego[DescNullsLast]',
+          limit: 1,
+          select: 'id',
+        },
+      }),
+      'chats',
+    )[0];
+
+    if (found?.id) return String(found.id);
+
+    throw new Error(
+      'в этом канале MAX ещё нет переписки с клиентом — отправьте сообщение из MAX или выберите SMS',
+    );
+  }
 
   // Ключ диалога совпадает с входящими SMS: 10 цифр без кода страны.
   const digits = contact.phone.replace(/\D/g, '');
@@ -368,6 +473,12 @@ export type ClientThread = {
   contacts: ClientContact[];
   channels: ClientChannel[];
   targetIds: string[];
+  /** Диалоги контакта по каналам: по ним выбираем канал с последней перепиской. */
+  chats: { chatId: string; channelId: string; lastAt: string }[];
+  /** Канал, с которого удобнее ответить: где переписка свежее. */
+  defaultChannelId: string | null;
+  /** Время последнего сообщения по всем каналам клиента — для окна файла. */
+  lastMessageAt: string | null;
   reason?: string;
   dealName?: string;
 };
@@ -386,6 +497,9 @@ export const threadOfDeal = async (
       contacts: [],
       channels: [],
       targetIds: [],
+      chats: [],
+      lastMessageAt: null,
+      defaultChannelId: null,
       reason: 'у сделки нет покупателя',
     };
   }
@@ -395,12 +509,66 @@ export const threadOfDeal = async (
 
   const chat = deal.personId ? await chatOfPerson(deal.personId) : null;
 
+  // Диалоги контакта по всем каналам: вкладка «Клиент» выбирает канал, где
+  // переписка свежее, — иначе ответ уходил в устаревший канал (SMS вместо MAX).
+  const chatRows = deal.personId
+    ? rowsOf(
+        await client.get<unknown>('/rest/chats', {
+          query: {
+            filter: `kontaktId[eq]:"${deal.personId}"`,
+            select: 'id,shlyuzId,maxAccountId,vremyaPoslednego',
+            limit: 50,
+          },
+        }),
+        'chats',
+      )
+    : [];
+
+  const chats = chatRows
+    .map((row) => ({
+      chatId: String(row.id ?? ''),
+      channelId: String(row.shlyuzId ?? row.maxAccountId ?? ''),
+      lastAt: String(row.vremyaPoslednego ?? ''),
+    }))
+    .filter((row) => row.chatId && row.channelId);
+
+  const freshest = [...chats].sort((a, b) => (a.lastAt < b.lastAt ? 1 : a.lastAt > b.lastAt ? -1 : 0))[0];
+
+  const known = new Set(channels.map((item) => item.id));
+
+  // Само поле чата «время последнего» обновляется не всегда, поэтому берём
+  // реальное последнее сообщение по всем диалогам контакта.
+  const chatIds = chats.map((item) => item.chatId);
+
+  const lastRows =
+    chatIds.length > 0
+      ? rowsOf(
+          await client.get<unknown>('/rest/soobshcheniya', {
+            query: {
+              filter: `chatId[in]:[${chatIds.map((id) => `"${id}"`).join(',')}]`,
+              order_by: 'createdAt[DescNullsLast]',
+              select: 'id,createdAt',
+              limit: 1,
+            },
+          }),
+          'soobshcheniya',
+        )
+      : [];
+
+  const lastMessageAt = lastRows[0]?.createdAt ? String(lastRows[0].createdAt) : null;
+
   return {
     chatId: chat?.id ? String(chat.id) : null,
     nomer: deal.phone || null,
     contacts: deal.contacts,
     channels,
     targetIds,
+    chats,
+    lastMessageAt,
+    defaultChannelId:
+      (freshest?.channelId && known.has(freshest.channelId) ? freshest.channelId : null) ??
+      channels[0]?.id ??
+      null,
     dealName: deal.name,
   };
 };
@@ -408,6 +576,8 @@ export const threadOfDeal = async (
 export type ClientMessage = {
   id: string;
   text: string;
+  attachments: { url: string; label: string; extension: string }[];
+  transcription?: string;
   createdAt: string;
   napravlenie: string;
   statusDostavki: string;
@@ -442,7 +612,8 @@ export const messagesOfDeal = async (
         path: '/rest/soobshcheniya',
         key: 'soobshcheniya',
         filter: `id[in]:[${chunk.join(',')}]`,
-        select: 'id,tekst,createdAt,chatId,napravlenie,statusDostavki,avtorId',
+        select:
+          'id,tekst,createdAt,chatId,napravlenie,statusDostavki,avtorId,avtorImya,vlozhenie,rasshifrovka',
       })),
     );
   }
@@ -508,6 +679,18 @@ export const messagesOfDeal = async (
     return {
       id: String(row.id ?? ''),
       text: String(row.tekst ?? ''),
+      attachments: (Array.isArray(row.vlozhenie) ? row.vlozhenie : [])
+        .map((item) => {
+          const file = item as { url?: string; label?: string; extension?: string };
+
+          return {
+            url: String(file.url ?? ''),
+            label: String(file.label ?? 'вложение'),
+            extension: String(file.extension ?? ''),
+          };
+        })
+        .filter((file) => file.url.length > 0),
+      transcription: String(row.rasshifrovka ?? ''),
       createdAt: String(row.createdAt ?? ''),
       napravlenie: String(row.napravlenie ?? ''),
       statusDostavki: String(row.statusDostavki ?? ''),
@@ -515,8 +698,8 @@ export const messagesOfDeal = async (
       personId,
       authorId: outgoing ? authorId : personId,
       authorName: outgoing
-        ? nameByAuthor.get(authorId) ?? 'Сотрудник'
-        : nameByChat.get(String(row.chatId ?? '')) ?? 'Клиент',
+        ? nameByAuthor.get(authorId) ?? (String(row.avtorImya ?? '') || 'Сотрудник')
+        : nameByChat.get(String(row.chatId ?? '')) ?? (String(row.avtorImya ?? '') || 'Клиент'),
       channelId: channelByChat.get(String(row.chatId ?? '')) ?? '',
     };
   });

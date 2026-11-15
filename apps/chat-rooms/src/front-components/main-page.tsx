@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { callRoute, functionsBase as envFunctionsBase } from './chat-api';
+import { staffToken } from 'src/shared/upload-attachment';
 import { connectChatSocket, type ChatSocketHandle } from './chat-socket';
 import { ChannelsPanel } from './channels-panel';
 import { defineFrontComponent } from 'twenty-sdk/define';
 import { SidePanelPages, openSidePanelPage } from 'twenty-sdk/front-component';
 
 import { MAIN_PAGE_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
+import { fileHref } from 'src/shared/file-link';
 
 /**
  * Центр коммуникации: список диалогов сотрудника, лента, отправка.
@@ -47,6 +49,8 @@ type Message = {
   napravlenie?: string | null;
   statusDostavki?: string | null;
   svyazkaIds?: string[];
+  attachments: { url: string; label: string; extension: string }[];
+  transcription?: string;
 };
 
 type DealThreadView = {
@@ -257,6 +261,15 @@ const ChatCenter = () => {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
+  // Файл, уже загруженный в CRM и ждущий отправки вместе с сообщением.
+  const [pendingFile, setPendingFile] = useState<{ fileId: string; label: string } | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  // Окно прикрепления открывается поверх CRM: песочница компонента не даёт
+  // прочитать выбранный файл и не пускает window.open.
+  const [attachOpen, setAttachOpen] = useState(false);
+  // Одноразовый пропуск: компонент в песочнице не видит localStorage, поэтому
+  // пропуск выдаёт маршрут приложения, а не сам браузер.
+  const [attachTicket, setAttachTicket] = useState('');
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionStart, setMentionStart] = useState<number>(-1);
   const [suggestions, setSuggestions] = useState<MentionSuggestion[]>([]);
@@ -282,6 +295,7 @@ const ChatCenter = () => {
   >([]);
   // Привязка сообщения к записи: открытый редактор, поиск и его результаты.
   const [linkFor, setLinkFor] = useState<string | null>(null);
+  const linkBoxRef = useRef<HTMLSpanElement | null>(null);
   const [linkQuery, setLinkQuery] = useState('');
   const [linkResults, setLinkResults] = useState<LinkResult[]>([]);
   const [linkBusy, setLinkBusy] = useState(false);
@@ -294,6 +308,8 @@ const ChatCenter = () => {
   const [isCreating, setIsCreating] = useState(false);
 
   const activeChatIdRef = useRef<string | null>(null);
+  /** Подпись ленты без токенов файлов: чтобы не дёргать перерисовку зря. */
+  const messagesSignatureRef = useRef('');
   const socketRef = useRef<ChatSocketHandle | null>(null);
 
   // Поле ввода принадлежит хосту: чтобы вернуть каретку после подмены текста,
@@ -322,7 +338,54 @@ const ChatCenter = () => {
       `/chat-messages?chatId=${encodeURIComponent(chatId)}`,
     );
 
-    setMessages(result.messages ?? []);
+    const fresh = result.messages ?? [];
+    // Twenty выдаёт новую ссылку на файл при каждом запросе (меняется токен в
+    // query). Если положить её в state как есть, браузер считает файл новым и
+    // сбрасывает воспроизведение аудио/видео при каждом обновлении ленты.
+    // Поэтому: сравниваем без query и сохраняем прежние ссылки для тех же файлов.
+    const signature = `${chatId}|${JSON.stringify(
+      fresh.map((message) => [
+        message.id,
+        message.text,
+        message.createdAt,
+        message.napravlenie,
+        message.statusDostavki,
+        message.transcription ?? '',
+        // Связи входят в отпечаток: без них привязка к сделке не обновляла
+        // ленту, пока не переключишь чат.
+        (message.svyazkaIds ?? []).join(','),
+        (message.attachments ?? []).map((file) => file.url.split('?')[0]),
+      ]),
+    )}`;
+
+    if (signature === messagesSignatureRef.current) {
+      return;
+    }
+
+    messagesSignatureRef.current = signature;
+
+    setMessages((previous) => {
+      const before = new Map(previous.map((message) => [message.id, message]));
+
+      return fresh.map((message) => {
+        const old = before.get(message.id);
+
+        if (!old || !old.attachments?.length) {
+          return message;
+        }
+
+        const oldByPath = new Map(
+          old.attachments.map((file) => [file.url.split('?')[0], file]),
+        );
+
+        return {
+          ...message,
+          attachments: (message.attachments ?? []).map(
+            (file) => oldByPath.get(file.url.split('?')[0]) ?? file,
+          ),
+        };
+      });
+    });
   }, []);
 
   const loadThreadDeals = useCallback(async (chatId: string) => {
@@ -366,12 +429,35 @@ const ChatCenter = () => {
         setLinkFor(null);
         setLinkQuery('');
         setLinkResults([]);
+      } catch (caughtError) {
+        // Раньше ошибка терялась: список висел, и было непонятно, что не так.
+        setError((caughtError as Error).message);
       } finally {
         setLinkBusy(false);
       }
     },
     [loadMessages, loadThreadDeals],
   );
+
+  // Список поиска закрывается кликом в любом другом месте ленты.
+  useEffect(() => {
+    if (!linkFor) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      const box = linkBoxRef.current;
+      const target = event.target as Node | null;
+
+      if (box && target && !box.contains(target)) {
+        setLinkFor(null);
+        setLinkQuery('');
+        setLinkResults([]);
+      }
+    };
+
+    document.addEventListener('mousedown', onPointerDown);
+
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [linkFor]);
 
   const markRead = useCallback(async (chatId: string) => {
     await callRoute('/chat-read', { method: 'POST', body: { chatId } });
@@ -462,6 +548,89 @@ const ChatCenter = () => {
 
     return () => clearInterval(timer);
   }, [refresh]);
+
+  // Сборка компонента не переносит `encType` и `target` из разметки в DOM:
+  // без них форма уходит обычным POST'ом и файл теряется. Ставим свойства
+  // напрямую, как только форма появилась.
+  useEffect(() => {
+    const form = document.getElementById('chat-send-form') as HTMLFormElement | null;
+
+    if (!form) {
+      return;
+    }
+
+    form.setAttribute('method', 'post');
+    form.setAttribute('enctype', 'multipart/form-data');
+    form.setAttribute('target', 'chat-upload-frame');
+    form.enctype = 'multipart/form-data';
+  }, [activeChatId, pendingFile]);
+
+  // Страховка для окна прикрепления: браузер может не пропустить
+  // postMessage из встроенной страницы. Тогда ориентируемся на саму ленту —
+  // как только в диалоге появилось новое сообщение, окно закрываем.
+  const attachBaseRef = useRef(0);
+
+  useEffect(() => {
+    if (!attachOpen) {
+      return;
+    }
+
+    attachBaseRef.current = messages.length;
+
+    const timer = setInterval(() => {
+      const chatId = activeChatIdRef.current;
+
+      if (chatId) {
+        void loadMessages(chatId);
+      }
+    }, 3000);
+
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachOpen, loadMessages]);
+
+  useEffect(() => {
+    if (attachOpen && messages.length > attachBaseRef.current) {
+      setAttachOpen(false);
+    }
+  }, [attachOpen, messages.length]);
+
+  // Ответ нативной отправки приходит из скрытого iframe: содержимое файла
+  // компоненту недоступно (Twenty отдаёт «снимок» без методов чтения),
+  // поэтому итог загрузки сообщает сервер приёмника.
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; ok?: boolean; error?: string } | null;
+
+      if (!data || data.type !== 'chat-upload') {
+        return;
+      }
+
+      setIsUploading(false);
+      setAttachOpen(false);
+
+      if (!data.ok) {
+        setError(data.error || 'файл не отправился');
+
+        return;
+      }
+
+      setDraft('');
+      setPendingFile(null);
+
+      const chatId = activeChatIdRef.current;
+
+      if (chatId) {
+        void loadMessages(chatId);
+      }
+
+      void loadDialogs();
+    };
+
+    window.addEventListener('message', onMessage);
+
+    return () => window.removeEventListener('message', onMessage);
+  }, [loadMessages, loadDialogs]);
 
   // Присутствие: пока диалог открыт и вкладка видна, пуш и счётчик не нужны.
   // Отдельный короткий такт — данные не перечитываем, только отмечаемся.
@@ -736,10 +905,42 @@ const ChatCenter = () => {
     };
   }, [mentionQuery]);
 
+  /**
+   * Отправка файла нативной формой.
+   *
+   * Почему так: компонент получает файл «снимком» без содержимого, прочитать
+   * его нельзя. Клик по submit-кнопке в этой сборке отменяется хостом, а
+   * прямой вызов form.submit() срабатывает — им и пользуемся. `enctype` и
+   * `target` из разметки не переносятся, поэтому ставим их здесь.
+   */
+  const submitWithFile = () => {
+    const form = document.getElementById('chat-send-form') as HTMLFormElement | null;
+
+    if (!form) {
+      setError('форма отправки не найдена');
+
+      return;
+    }
+
+    form.enctype = 'multipart/form-data';
+    form.target = 'chat-upload-frame';
+
+    setIsUploading(true);
+    setError(null);
+    form.submit();
+  };
+
   const sendMessage = async () => {
     const text = draft.trim();
 
-    if (!text || !activeChatId || isSending) {
+    // С выбранным файлом отправляет форма (нативно, мимо JavaScript) — здесь
+    // файл недоступен, поэтому обычный путь в этом случае не нужен.
+    if (pendingFile) {
+      return;
+    }
+
+    // Вложение без текста — обычный случай: файл сам себе сообщение.
+    if (!text || !activeChatId || isSending || isUploading) {
       return;
     }
 
@@ -749,16 +950,53 @@ const ChatCenter = () => {
     try {
       await callRoute('/chat-send', {
         method: 'POST',
-        body: { chatId: activeChatId, text, mentions: pendingMentions },
+        body: {
+          chatId: activeChatId,
+          text,
+          mentions: pendingMentions,
+          ...(pendingFile ? { attachment: pendingFile } : {}),
+        },
       });
 
       setDraft('');
+      setPendingFile(null);
       setPendingMentions([]);
       await Promise.all([loadMessages(activeChatId), loadDialogs()]);
     } catch (caughtError) {
       setError((caughtError as Error).message);
     } finally {
       setIsSending(false);
+    }
+  };
+
+  /**
+   * Открыть окно прикрепления файла.
+   *
+   * Сначала берём одноразовый пропуск у приложения: внутри песочницы
+   * localStorage недоступен, поэтому обычный токен сотрудника в окно передать
+   * нельзя. Пропуск живёт 15 минут и гасится после первой отправки.
+   */
+  const openAttach = async () => {
+    if (!activeChatId || isUploading) {
+      return;
+    }
+
+    setError(null);
+
+    try {
+      const answer = await callRoute<{ ticket?: string }>('/chat-upload-ticket', {
+        method: 'POST',
+        body: {},
+      });
+
+      if (!answer.ticket) {
+        throw new Error('не удалось открыть окно файла: пропуск не выдан');
+      }
+
+      setAttachTicket(answer.ticket);
+      setAttachOpen(true);
+    } catch (caughtError) {
+      setError((caughtError as Error).message);
     }
   };
 
@@ -882,6 +1120,9 @@ const ChatCenter = () => {
     dealFilter === 'all'
       ? messages
       : messages.filter((message) => (message.svyazkaIds ?? []).includes(dealFilter));
+
+  // Лента держится на последнем сообщении.
+  const messagesBoxRef = useRef<HTMLDivElement | null>(null);
 
   // Открыли чат сделки по ссылке из уведомления — показываем полный список,
   // иначе выбранного диалога не видно в колонке.
@@ -1501,15 +1742,30 @@ const ChatCenter = () => {
               </span>
             </div>
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px', minHeight: 0 }}>
+            <div
+              ref={messagesBoxRef}
+              data-chat-scroll="1"
+              style={{
+                flex: 1,
+                overflowY: 'auto',
+                padding: '16px 20px',
+                minHeight: 0,
+                // Перевёрнутая колонка: состояние покоя — низ ленты.
+                display: 'flex',
+                flexDirection: 'column-reverse',
+              }}
+            >
               {visibleMessages.length === 0 && (
                 <div style={{ fontSize: '13px', color: '#999' }}>
                   Сообщений пока нет — напишите первым
                 </div>
               )}
 
-              {visibleMessages.map((message) => {
-                const isMine = message.authorId === myMemberId;
+              {visibleMessages.slice().reverse().map((message) => {
+                // У внешних каналов (MAX, SMS) автора-сотрудника нет: сторону
+                // определяем по направлению, иначе исходящие выглядели чужими.
+                const isMine =
+                  message.authorId === myMemberId || message.napravlenie === 'ISHODYASHCHIE';
 
                 return (
                   <div
@@ -1518,6 +1774,7 @@ const ChatCenter = () => {
                       display: 'flex',
                       justifyContent: isMine ? 'flex-end' : 'flex-start',
                       marginBottom: '10px',
+                      flexShrink: 0,
                     }}
                   >
                     <div style={{ maxWidth: '70%' }}>
@@ -1544,6 +1801,89 @@ const ChatCenter = () => {
                         }}
                       >
                         {renderMentions(message.text, message.mentions)}
+
+                        {(message.attachments ?? []).map((file, index) => {
+                          const name = `${file.extension}${file.label}`;
+                          const isImage = /\.(png|jpg|jpeg|webp|gif)$/i.test(name);
+                          const isVideo = /\.(mp4|webm|mov|m4v)$/i.test(name) || /^video\//.test(file.label);
+                          const isAudio =
+                            /\.(ogg|opus|mp3|m4a|wav)$/i.test(name) || /^audio\//.test(file.label);
+
+                          if (isAudio) {
+                            return (
+                              <audio
+                                key={index}
+                                src={file.url}
+                                controls
+                                preload="metadata"
+                                style={{ marginTop: '6px', width: '240px', display: 'block' }}
+                              />
+                            );
+                          }
+
+                          if (isVideo) {
+                            return (
+                              <video
+                                key={index}
+                                src={file.url}
+                                controls
+                                preload="metadata"
+                                style={{
+                                  marginTop: '6px',
+                                  maxWidth: '260px',
+                                  maxHeight: '260px',
+                                  borderRadius: '8px',
+                                  display: 'block',
+                                }}
+                              />
+                            );
+                          }
+
+                          return isImage ? (
+                            <a key={index} href={fileHref(file.url, file.label)} target="_blank" rel="noreferrer">
+                              <img
+                                src={file.url}
+                                alt={file.label}
+                                style={{
+                                  marginTop: '6px',
+                                  maxWidth: '260px',
+                                  maxHeight: '260px',
+                                  borderRadius: '8px',
+                                  display: 'block',
+                                }}
+                              />
+                            </a>
+                          ) : (
+                            <a
+                              key={index}
+                              href={fileHref(file.url, file.label)}
+                              target="_blank"
+                              rel="noreferrer"
+                              // PDF смотрим во вкладке, остальное скачиваем — и тогда
+                              // браузер берёт имя из download, а не uuid из ссылки.
+                              download={/\.pdf$/i.test(name) ? undefined : file.label}
+                              style={{ display: 'block', marginTop: '4px', fontSize: '12px', color: isMine ? '#dbe7ff' : '#1961ff' }}
+                            >
+                              {/\.pdf$/i.test(name) ? '📄' : '📎'} {file.label}
+                            </a>
+                          );
+                        })}
+
+                        {message.transcription ? (
+                          <div
+                            style={{
+                              marginTop: '6px',
+                              paddingTop: '6px',
+                              borderTop: `1px solid ${isMine ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.08)'}`,
+                              fontSize: '12px',
+                              lineHeight: '16px',
+                              whiteSpace: 'pre-wrap',
+                              color: isMine ? '#e8f0ff' : '#555',
+                            }}
+                          >
+                            {message.transcription}
+                          </div>
+                        ) : null}
                       </div>
 
                       {message.napravlenie === 'ISHODYASHCHIE' && message.statusDostavki && (
@@ -1639,6 +1979,7 @@ const ChatCenter = () => {
 
                           {linkFor === message.id ? (
                             <span
+                              ref={linkBoxRef}
                               onClick={(event) => event.stopPropagation()}
                               style={{ display: 'inline-flex', flexDirection: 'column', gap: '2px' }}
                             >
@@ -1796,6 +2137,35 @@ const ChatCenter = () => {
                     {renderHighlightedDraft()}
                   </div>
 
+                  {pendingFile ? (
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        marginBottom: '4px',
+                        fontSize: '12px',
+                        color: '#1961ff',
+                      }}
+                    >
+                      📎 {pendingFile.label}
+                      <button
+                        onClick={() => setPendingFile(null)}
+                        title="Убрать файл"
+                        style={{
+                          border: 'none',
+                          background: 'transparent',
+                          cursor: 'pointer',
+                          color: '#8b8b8b',
+                          fontSize: '12px',
+                          padding: '0 2px',
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ) : null}
+
                   <textarea
                     ref={composerRef}
                     value={draft}
@@ -1892,17 +2262,47 @@ const ChatCenter = () => {
                   />
                 </div>
 
+                {/* Песочница компонента не отдаёт содержимое выбранного
+                    файла (это «снимок» без Blob) и не пускает window.open.
+                    Поэтому выбор файла открывается окном поверх CRM. */}
                 <button
-                  onClick={() => void sendMessage()}
-                  disabled={isSending || draft.trim().length === 0}
+                  type="button"
+                  data-chat-attach="1"
+                  onClick={() => void openAttach()}
+                  disabled={!activeChatId || isUploading}
+                  title={isUploading ? 'Загрузка файла…' : 'Прикрепить файл'}
                   style={{
-                    background: isSending || draft.trim().length === 0 ? '#c9d6ff' : '#1961ff',
+                    background: '#f1f3f8',
+                    color: '#1961ff',
+                    border: 'none',
+                    borderRadius: '8px',
+                    padding: '9px 12px',
+                    fontSize: '14px',
+                    cursor: !activeChatId ? 'default' : 'pointer',
+                    opacity: !activeChatId ? 0.6 : isUploading ? 0.55 : 1,
+                  }}
+                >
+                  📎
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void sendMessage()}
+                  disabled={isSending || isUploading || (draft.trim().length === 0 && !pendingFile)}
+                  style={{
+                    background:
+                      isSending || isUploading || (draft.trim().length === 0 && !pendingFile)
+                        ? '#c9d6ff'
+                        : '#1961ff',
                     color: '#fff',
                     border: 'none',
                     borderRadius: '8px',
                     padding: '9px 16px',
                     fontSize: '13px',
-                    cursor: isSending || draft.trim().length === 0 ? 'default' : 'pointer',
+                    cursor:
+                      isSending || isUploading || (draft.trim().length === 0 && !pendingFile)
+                        ? 'default'
+                        : 'pointer',
                   }}
                 >
                   Отправить
@@ -1911,6 +2311,63 @@ const ChatCenter = () => {
             </div>
           </>
         )}
+
+        {attachOpen && activeChatId ? (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(15, 23, 42, 0.45)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 9999,
+            }}
+          >
+            <div
+              style={{
+                background: '#fff',
+                borderRadius: '12px',
+                overflow: 'hidden',
+                width: '520px',
+                maxWidth: '92vw',
+                boxShadow: '0 20px 60px rgba(15, 23, 42, 0.35)',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 14px',
+                  borderBottom: '1px solid #e5e7eb',
+                }}
+              >
+                <span style={{ fontSize: '14px', fontWeight: 600 }}>
+                  Прикрепить файл
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setAttachOpen(false)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    fontSize: '16px',
+                    cursor: 'pointer',
+                    color: '#6b7280',
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+              <iframe
+                src={`/integrations/chat/page?chatId=${activeChatId}#token=${encodeURIComponent(attachTicket)}`}
+                title="Прикрепить файл"
+                style={{ width: '100%', height: '340px', border: 'none' }}
+              />
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

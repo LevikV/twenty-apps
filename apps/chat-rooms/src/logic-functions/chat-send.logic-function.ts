@@ -27,12 +27,19 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
     chatId?: string;
     text?: string;
     mentions?: { type?: string; id?: string; label?: string }[];
+    // Файл загружается отдельным маршрутом chat-upload и приходит сюда
+    // готовой парой «id файла + имя».
+    attachment?: { fileId?: string; label?: string };
   };
   const chatId = String(body.chatId ?? '').trim();
   const text = String(body.text ?? '').trim();
 
-  if (!chatId || !text) {
-    return new Response(JSON.stringify({ error: 'Нужны chatId и текст' }), {
+  const attachmentFileId = String(body.attachment?.fileId ?? '').trim();
+  const attachmentLabel = String(body.attachment?.label ?? '').trim() || 'файл';
+
+  // Вложение без текста — нормальный случай (как в телефоне).
+  if (!chatId || (!text && !attachmentFileId)) {
+    return new Response(JSON.stringify({ error: 'Нужны chatId и текст или файл' }), {
       status: 400,
       headers: { 'content-type': 'application/json' },
     });
@@ -48,7 +55,13 @@ const handler = async (event: RoutePayload, context: LogicFunctionExecutionConte
       }));
 
     const service = new ChatService();
-    const result = await service.send(context.workspaceMemberId, chatId, text, mentions);
+    const result = await service.send(
+      context.workspaceMemberId,
+      chatId,
+      text,
+      mentions,
+      attachmentFileId ? { vlozhenie: [{ fileId: attachmentFileId, label: attachmentLabel }] } : {},
+    );
 
     return new Response(JSON.stringify(result), {
       status: 200,

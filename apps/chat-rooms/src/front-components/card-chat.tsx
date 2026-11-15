@@ -6,6 +6,7 @@ import { defineFrontComponent } from 'twenty-sdk/define';
 import { SidePanelPages, openSidePanelPage, useSelectedRecordIds } from 'twenty-sdk/front-component';
 
 import { CARD_CHAT_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
+import { fileHref } from 'src/shared/file-link';
 
 /**
  * Чат в карточке записи (Заказ, Ремонт, Тендер, Заправка, Задача).
@@ -25,6 +26,8 @@ type Message = {
   createdAt: string;
   authorName: string;
   mentions?: MentionView[];
+  attachments?: { url: string; label: string; extension: string }[];
+  transcription?: string;
 };
 
 type MentionView = { type: string; id: string; label: string };
@@ -46,6 +49,8 @@ type ClientMessage = {
   personId?: string;
   authorId?: string;
   channelId?: string;
+  attachments?: { url: string; label: string; extension: string }[];
+  transcription?: string;
 };
 
 /** Цвета собеседников: у каждого контакта свой, чтобы лента читалась с листа. */
@@ -70,9 +75,12 @@ type ClientContact = {
 
 type ClientChannel = {
   id: string;
+  kind: 'SMS' | 'MAX';
   name: string;
   nomer: string;
   deviceId: string;
+  ownerId: string;
+  ownerName: string;
 };
 
 type ClientThreadState = {
@@ -82,8 +90,20 @@ type ClientThreadState = {
   dealName?: string;
   contacts: ClientContact[];
   channels: ClientChannel[];
+  chats: { chatId: string; channelId: string; lastAt: string }[];
+  defaultChannelId: string | null;
+  lastMessageAt: string | null;
   messages: ClientMessage[];
 };
+
+/**
+ * Свежесть переписки клиента по всем каналам, в миллисекундах.
+ *
+ * Нужна для окна прикрепления: файл может уйти в канал, который сейчас не
+ * показан в ленте, поэтому «прибавилось ли сообщений» — ненадёжный признак.
+ */
+const lastClientActivity = (thread: ClientThreadState | null): number =>
+  Date.parse(String(thread?.lastMessageAt ?? '')) || 0;
 
 const DELIVERY_LABEL: Record<string, { text: string; color: string }> = {
   OTPRAVLYAETSYA: { text: 'отправляется', color: '#8b8b8b' },
@@ -111,6 +131,31 @@ type RoomState = {
   messages: Message[];
 };
 
+
+const keepFileUrls = <T extends { id: string; attachments?: { url: string; label: string; extension: string }[] }>(
+  fresh: T[],
+  previous: T[],
+): T[] => {
+  // Twenty выдаёт новую ссылку на файл при каждом запросе (в query меняется
+  // токен). Без этого браузер считает файл новым и сбрасывает воспроизведение
+  // аудио/видео при каждом обновлении ленты.
+  const before = new Map(previous.map((message) => [message.id, message]));
+
+  return fresh.map((message) => {
+    const old = before.get(message.id);
+
+    if (!old?.attachments?.length || !message.attachments?.length) {
+      return message;
+    }
+
+    const oldByPath = new Map(old.attachments.map((file) => [file.url.split('?')[0], file]));
+
+    return {
+      ...message,
+      attachments: message.attachments.map((file) => oldByPath.get(file.url.split('?')[0]) ?? file),
+    };
+  });
+};
 
 const formatTime = (iso: string): string =>
   new Date(iso).toLocaleString('ru-RU', {
@@ -147,6 +192,66 @@ const openMention = (mention: MentionView) => {
 };
 
 /** Подсветка упоминаний в ленте — по данным сервера (как в «Центре коммуникации»). */
+const renderAttachment = (
+  file: { url: string; label: string; extension: string },
+  index: number,
+) => {
+  const name = `${file.extension}${file.label}`;
+  const isImage = /\.(png|jpg|jpeg|webp|gif)$/i.test(name);
+  const isVideo = /\.(mp4|webm|mov|m4v)$/i.test(name);
+  const isAudio = /\.(ogg|opus|mp3|m4a|wav)$/i.test(name) || /^audio\//.test(file.label);
+
+  if (isAudio) {
+    return (
+      <audio
+        key={index}
+        src={file.url}
+        controls
+        preload="metadata"
+        style={{ marginTop: '6px', width: '220px', display: 'block' }}
+      />
+    );
+  }
+
+  if (isVideo) {
+    return (
+      <video
+        key={index}
+        src={file.url}
+        controls
+        preload="metadata"
+        style={{ marginTop: '6px', maxWidth: '220px', borderRadius: '8px', display: 'block' }}
+      />
+    );
+  }
+
+  if (isImage) {
+    return (
+      <a key={index} href={fileHref(file.url, file.label)} target="_blank" rel="noreferrer">
+        <img
+          src={file.url}
+          alt={file.label}
+          style={{ marginTop: '6px', maxWidth: '220px', borderRadius: '8px', display: 'block' }}
+        />
+      </a>
+    );
+  }
+
+  return (
+    <a
+      key={index}
+      href={fileHref(file.url, file.label)}
+      target="_blank"
+      rel="noreferrer"
+      // Для скачиваемых файлов имя берём из подписи, иначе браузер сохранит uuid.
+      download={/\.pdf$/i.test(`${file.extension}${file.label}`) ? undefined : file.label}
+      style={{ display: 'block', marginTop: '4px', fontSize: '12px', color: '#1961ff' }}
+    >
+      {file.extension === 'pdf' ? '📄' : '📎'} {file.label}
+    </a>
+  );
+};
+
 const renderMentions = (text: string | null, mentions: MentionView[] = []) => {
   const value = text ?? '';
 
@@ -208,11 +313,21 @@ export const CardChat = () => {
   const [meId, setMeId] = useState('');
   const [onlyMine, setOnlyMine] = useState(false);
   const clientListRef = useRef<HTMLDivElement | null>(null);
+  const roomListRef = useRef<HTMLDivElement | null>(null);
   const [clientChannelId, setClientChannelId] = useState('');
   const [clientSending, setClientSending] = useState(false);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
+
+  // Окно прикрепления файла. Компонент живёт в песочнице about:srcdoc и не
+  // видит localStorage, поэтому пропуск выдаёт маршрут приложения, а файл
+  // отправляет браузер из окна поверх карточки.
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [attachTicket, setAttachTicket] = useState('');
+  const [attachChatId, setAttachChatId] = useState('');
+  const [attachMode, setAttachMode] = useState<'discussion' | 'client'>('discussion');
+  const attachBaseRef = useRef(0);
 
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionStart, setMentionStart] = useState<number>(-1);
@@ -238,7 +353,11 @@ export const CardChat = () => {
         `/chat-record-room?recordId=${encodeURIComponent(recordId)}`,
       );
 
-      setRoom(state);
+      setRoom((previous) =>
+        previous
+          ? { ...state, messages: keepFileUrls(state.messages ?? [], previous.messages ?? []) }
+          : state,
+      );
       roomRef.current = state;
       setError(null);
 
@@ -270,10 +389,22 @@ export const CardChat = () => {
         (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
       );
 
-      setClientThread({ ...state, messages: sortedMessages });
+      setClientThread((previous) => ({
+        ...state,
+        messages: previous
+          ? keepFileUrls(sortedMessages, previous.messages ?? [])
+          : sortedMessages,
+      }));
       setClientError(null);
       setClientPersonId((current) => current || state.contacts?.[0]?.personId || '');
-      setClientChannelId((current) => current || state.channels?.[0]?.id || '');
+      // Канал по умолчанию — тот, где переписка свежее (часто это MAX),
+      // а не первый по списку: иначе ответ уходит в старый SMS-диалог.
+      setClientChannelId((current) => {
+        const list = state.channels ?? [];
+        const stillThere = Boolean(current) && list.some((item) => item.id === current);
+
+        return stillThere ? current : state.defaultChannelId || list[0]?.id || '';
+      });
     } catch (loadError) {
       setClientError(loadError instanceof Error ? loadError.message : String(loadError));
     }
@@ -319,14 +450,190 @@ export const CardChat = () => {
     }
   };
 
-  // Лента клиента всегда открывается на последнем сообщении.
-  useEffect(() => {
-    const node = clientListRef.current;
+  /**
+   * Открыть окно прикрепления файла.
+   *
+   * Чат берём из уже загруженного состояния: у «Обсуждения» это комната записи,
+   * у «Клиента» — переписка с покупателем. Пропуск выдаёт приложение: внутри
+   * песочницы обычный токен сотрудника недоступен.
+   */
+  const openAttach = async (mode: 'discussion' | 'client') => {
+    // Для клиента чат определяет выбранный канал: у одного человека их может
+    // быть несколько (MAX и несколько SMS), и «первый попавшийся» — неверный.
+    const knownChatId = mode === 'client' ? '' : room?.chatId ?? '';
 
-    if (node) {
-      node.scrollTop = node.scrollHeight;
+    const showError = mode === 'client' ? setClientError : setError;
+
+    showError(null);
+
+    try {
+      // Подготовку спрашиваем всегда, даже когда чат уже известен: приложение
+      // подпишет сотрудника в этот чат, иначе приёмник откажет в доступе.
+      const prepared = await callRoute<{ chatId?: string; error?: string }>(
+        '/chat-record-attach',
+        {
+          method: 'POST',
+          body: {
+            recordId,
+            mode,
+            chatId: knownChatId || undefined,
+            channelId: mode === 'client' ? clientChannelId || undefined : undefined,
+          },
+        },
+      );
+
+      const chatId = prepared.chatId || knownChatId;
+
+      if (!chatId) {
+        throw new Error('не удалось открыть чат для файла');
+      }
+
+      const answer = await callRoute<{ ticket?: string }>('/chat-upload-ticket', {
+        method: 'POST',
+        body: {},
+      });
+
+      if (!answer.ticket) {
+        throw new Error('не удалось открыть окно файла: пропуск не выдан');
+      }
+
+      setAttachTicket(answer.ticket);
+      setAttachChatId(chatId);
+      setAttachMode(mode);
+      setAttachOpen(true);
+    } catch (openError) {
+      showError(openError instanceof Error ? openError.message : String(openError));
     }
-  }, [clientThread?.messages.length, clientThread?.chatId, tab, onlyMine]);
+  };
+
+  // Итог загрузки из окна: файл уже создал сообщение, нам осталось связать его
+  // с записью (для клиентской ленты) и перечитать нужную ленту.
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as
+        | { type?: string; ok?: boolean; messageId?: string; error?: string }
+        | null;
+
+      // Страница окна сообщает и итог, и просьбу закрыться — второй сигнал
+      // нужен, если первый потерялся (окно вложено в панель карточки).
+      if (data && data.type === 'chat-upload-close') {
+        setAttachOpen(false);
+
+        return;
+      }
+
+      if (!data || data.type !== 'chat-upload') {
+        return;
+      }
+
+      setAttachOpen(false);
+
+      const showError = attachMode === 'client' ? setClientError : setError;
+
+      if (!data.ok) {
+        showError(data.error || 'файл не отправился');
+
+        return;
+      }
+
+      if (data.messageId) {
+        void callRoute('/chat-record-attach', {
+          method: 'POST',
+          body: {
+            recordId,
+            chatId: attachChatId,
+            messageId: data.messageId,
+            mode: attachMode,
+          },
+        }).catch(() => undefined);
+      }
+
+      if (attachMode === 'client') {
+        void reloadClient();
+      } else {
+        void reload();
+      }
+    };
+
+    window.addEventListener('message', onMessage);
+
+    return () => window.removeEventListener('message', onMessage);
+  }, [attachChatId, attachMode, recordId, reload, reloadClient]);
+
+  // Страховка: если сообщение из окна не дойдёт, окно закроется по появлению
+  // нового сообщения в ленте.
+  useEffect(() => {
+    if (!attachOpen) {
+      return;
+    }
+
+    // Для клиента считаем не сообщения выбранного канала, а свежесть всей
+    // переписки: файл может уйти в другой канал, и тогда счётчик не изменится.
+    attachBaseRef.current =
+      attachMode === 'client'
+        ? lastClientActivity(clientThread)
+        : room?.messages.length ?? 0;
+
+    const timer = setInterval(() => {
+      if (attachMode === 'client') {
+        void reloadClient();
+      } else {
+        void reload();
+      }
+    }, 3000);
+
+    return () => clearInterval(timer);
+  }, [attachOpen, attachMode, reload, reloadClient]);
+
+  useEffect(() => {
+    if (!attachOpen) {
+      return;
+    }
+
+    const current =
+      attachMode === 'client'
+        ? lastClientActivity(clientThread)
+        : room?.messages.length ?? 0;
+
+    if (current > attachBaseRef.current) {
+      setAttachOpen(false);
+    }
+  }, [
+    attachOpen,
+    attachMode,
+    clientThread?.messages.length,
+    clientThread?.lastMessageAt,
+    room?.messages.length,
+  ]);
+
+  // Лента всегда внизу: и при открытии, и при новом сообщении.
+  // Прокручиваем повторно после отрисовки — иначе scrollTop упирается
+  // в высоту, которая ещё не пересчитана под новые пузыри.
+  const keepBottom = (node: HTMLDivElement | null) => {
+    if (!node) {
+      return () => undefined;
+    }
+
+    const toBottom = () => {
+      node.scrollTop = node.scrollHeight;
+    };
+
+    // Несколько заходов: высота ленты меняется после отрисовки содержимого.
+    const timers = [0, 50, 150, 400].map((delay) => setTimeout(toBottom, delay));
+
+    return () => timers.forEach(clearTimeout);
+  };
+
+  useEffect(
+    () => keepBottom(clientListRef.current),
+    [clientThread?.messages.length, clientThread?.chatId, tab, onlyMine],
+  );
+
+  // Обсуждение тоже держим на последнем сообщении.
+  useEffect(
+    () => keepBottom(roomListRef.current),
+    [room?.messages.length, room?.chatId, tab],
+  );
 
   useEffect(() => {
     void reload();
@@ -623,6 +930,63 @@ export const CardChat = () => {
     </div>
   ) : null;
 
+// Пока выбирается файл, панель целиком отдаётся окну: в карточке она
+  // короткая (420 px), и любое окно внутри ленты уходило за её нижний край —
+  // со стороны это выглядело как «клик не сработал».
+  if (attachOpen) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          height: '420px',
+          maxHeight: '100%',
+          minHeight: 0,
+          boxSizing: 'border-box',
+          border: '1px solid #d6d6d6',
+          borderRadius: '8px',
+          overflow: 'hidden',
+          background: '#fff',
+          fontFamily: 'Inter, sans-serif',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 12px',
+            borderBottom: '1px solid #e5e7eb',
+          }}
+        >
+          <span style={{ fontSize: '14px', fontWeight: 600, color: '#1a1a1a' }}>
+            Прикрепить файл
+          </span>
+          <button
+            type="button"
+            onClick={() => setAttachOpen(false)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              fontSize: '16px',
+              cursor: 'pointer',
+              color: '#6b7280',
+            }}
+          >
+            ✕
+          </button>
+        </div>
+        <iframe
+          src={`/integrations/chat/page?chatId=${attachChatId}${
+            attachMode === 'client' ? `&recordId=${encodeURIComponent(recordId)}` : ''
+          }#token=${encodeURIComponent(attachTicket)}`}
+          title="Прикрепить файл"
+          style={{ flex: 1, width: '100%', border: 'none' }}
+        />
+      </div>
+    );
+  }
+
   if (isDeal && tab === 'client') {
     // «Только мои»: мои отправленные и ответы клиента на мои каналы.
     const myChannelIds = new Set((clientThread?.channels ?? []).map((channel) => channel.id));
@@ -686,15 +1050,17 @@ export const CardChat = () => {
                 </span>
               )}
 
-              {clientThread.channels.length > 1 && (
+              {clientThread.channels.length > 0 && (
                 <select
                   value={clientChannelId}
                   onChange={(event) => setClientChannelId(event.target.value)}
-                  style={{ fontSize: '11px', padding: '2px 4px', borderRadius: '4px', border: '1px solid #d6d6d6' }}
+                  title="С какого канала отправить"
+                  style={{ fontSize: '11px', padding: '2px 4px', borderRadius: '4px', border: '1px solid #d6d6d6', maxWidth: '210px' }}
                 >
                   {clientThread.channels.map((channel) => (
                     <option key={channel.id} value={channel.id}>
-                      {channel.name}
+                      {channel.kind === 'MAX' ? 'MAX' : 'SMS'} · {channel.ownerName}
+                      {channel.nomer ? ` · ${channel.nomer}` : ` · ${channel.name}`}
                     </option>
                   ))}
                 </select>
@@ -727,8 +1093,10 @@ export const CardChat = () => {
                 flex: 1,
                 minHeight: 0,
                 overflowY: 'auto',
-                display: 'flex',
-                flexDirection: 'column',
+                // Перевёрнутая колонка: состояние покоя — низ ленты,
+                // поэтому последнее сообщение видно без программной прокрутки.
+                display: attachOpen ? 'none' : 'flex',
+                flexDirection: 'column-reverse',
                 gap: '8px',
                 padding: '2px',
               }}
@@ -739,14 +1107,14 @@ export const CardChat = () => {
                 </div>
               )}
 
-              {visibleClientMessages.map((message) => {
+              {visibleClientMessages.slice().reverse().map((message) => {
                 const mine = message.napravlenie === 'ISHODYASHCHIE';
                 const bubble = contactColor(message.authorId || message.personId || 'клиент');
 
                 return (
                   <div
                     key={message.id}
-                    style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', gap: '2px' }}
+                    style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', gap: '2px', flexShrink: 0 }}
                   >
                     <div style={{ fontSize: '11px', color: '#8b8b8b' }}>
                       {message.authorName} · {formatTime(message.createdAt)}
@@ -765,6 +1133,23 @@ export const CardChat = () => {
                       }}
                     >
                       {message.text}
+                      {(message.attachments ?? []).map(renderAttachment)}
+
+                {message.transcription ? (
+                  <div
+                    style={{
+                      marginTop: '6px',
+                      paddingTop: '6px',
+                      borderTop: '1px solid rgba(0,0,0,0.08)',
+                      fontSize: '12px',
+                      lineHeight: '16px',
+                      whiteSpace: 'pre-wrap',
+                      color: '#555',
+                    }}
+                  >
+                    {message.transcription}
+                  </div>
+                ) : null}
                     </div>
 
                     {mine && message.statusDostavki && (
@@ -783,6 +1168,22 @@ export const CardChat = () => {
             </div>
 
             <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                type="button"
+                onClick={() => void openAttach('client')}
+                title="Прикрепить файл"
+                style={{
+                  border: '1px solid #d6d6d6',
+                  borderRadius: '6px',
+                  background: '#f5f6f8',
+                  color: '#1961ff',
+                  padding: '0 10px',
+                  fontSize: '15px',
+                  cursor: 'pointer',
+                }}
+              >
+                📎
+              </button>
               <textarea
                 value={clientDraft}
                 onChange={(event) => setClientDraft(event.target.value)}
@@ -830,7 +1231,7 @@ export const CardChat = () => {
 
   const popupOpen = mentionQuery !== null && suggestions.length > 0;
 
-  return (
+    return (
     <div
       style={{
         display: 'flex',
@@ -854,12 +1255,16 @@ export const CardChat = () => {
       )}
 
       <div
+        ref={roomListRef}
         style={{
           flex: 1,
           minHeight: 0,
           overflowY: 'auto',
-          display: 'flex',
-          flexDirection: 'column',
+          // Перевёрнутая колонка: состояние покоя — низ ленты.
+          // Пока открыто окно прикрепления — прячем ленту, иначе окно
+          // уходит за нижнюю границу панели фиксированной высоты.
+          display: attachOpen ? 'none' : 'flex',
+          flexDirection: 'column-reverse',
           gap: '8px',
           padding: '2px',
         }}
@@ -876,8 +1281,8 @@ export const CardChat = () => {
           </div>
         )}
 
-        {room?.messages.map((message) => (
-          <div key={message.id} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+        {room?.messages.slice().reverse().map((message) => (
+          <div key={message.id} style={{ display: 'flex', flexDirection: 'column', gap: '2px', flexShrink: 0 }}>
             <div style={{ fontSize: '11px', color: '#8b8b8b' }}>
               {message.authorName} · {formatTime(message.createdAt)}
             </div>
@@ -893,6 +1298,23 @@ export const CardChat = () => {
               }}
             >
               {renderMentions(message.text, message.mentions ?? [])}
+              {(message.attachments ?? []).map(renderAttachment)}
+
+                {message.transcription ? (
+                  <div
+                    style={{
+                      marginTop: '6px',
+                      paddingTop: '6px',
+                      borderTop: '1px solid rgba(0,0,0,0.08)',
+                      fontSize: '12px',
+                      lineHeight: '16px',
+                      whiteSpace: 'pre-wrap',
+                      color: '#555',
+                    }}
+                  >
+                    {message.transcription}
+                  </div>
+                ) : null}
             </div>
           </div>
         ))}
@@ -1054,7 +1476,24 @@ export const CardChat = () => {
         />
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => void openAttach('discussion')}
+            title="Прикрепить файл"
+            style={{
+              border: '1px solid #d6d6d6',
+              borderRadius: '8px',
+              background: '#f5f6f8',
+              color: '#1961ff',
+              padding: '6px 12px',
+              fontSize: '15px',
+              cursor: 'pointer',
+            }}
+          >
+            📎
+          </button>
+
           <button
             onClick={() => void send()}
             disabled={isSending || draft.trim().length === 0}

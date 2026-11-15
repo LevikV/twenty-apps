@@ -21,6 +21,10 @@ export default defineApplicationRole({
   canUpdateAllObjectRecords: true,
   canSoftDeleteAllObjectRecords: true,
   canDestroyAllObjectRecords: false,
+  // Право загружать файлы (PermissionFlagType.UPLOAD_FILE). Без него Twenty
+  // отвечает «Entity performing the request does not have permission» на любую
+  // загрузку в файловое поле — именно так грузят вложения почты и заметок.
+  permissionFlagUniversalIdentifiers: ['dc6931a9-44bd-5164-a983-3db5db837f54'],
   objectPermissions: [
     {
       objectUniversalIdentifier: '062d14d7-7280-4fae-970f-3e9a8cb88de2',

@@ -1,5 +1,7 @@
 import { RestApiClient } from 'twenty-client-sdk/rest';
 
+import { readAllRows } from 'src/shared/paging';
+
 import { linksOfMessages } from 'src/shared/message-links';
 import { PRESENCE_TTL_MS, isPresent, setOpenTarget, takeOpenTarget } from 'src/shared/presence';
 
@@ -36,6 +38,9 @@ export type MentionView = {
   label: string;
 };
 
+/** Сколько последних сообщений отдавать в ленту одного диалога. */
+const LIMIT_RENDER = 300;
+
 export type MessageView = {
   id: string;
   text: string | null;
@@ -48,6 +53,9 @@ export type MessageView = {
   statusDostavki: string | null;
   /** Записи, к которым отнесено сообщение (связки чатов): сделка, ремонт, тендер, заправка, задача. */
   svyazkaIds: string[];
+  /** Вложения: фото, видео, документы. */
+  attachments: { url: string; label: string; extension: string }[];
+  transcription?: string;
 };
 
 /**
@@ -139,15 +147,15 @@ export class ChatService {
   }
 
   private async myParticipations(memberId: string): Promise<Row[]> {
-    const response = await this.client.get<unknown>('/rest/chatParticipants', {
-      query: {
-        filter: `polzovatelId[eq]:"${memberId}"`,
-        select: 'id,chatId,neprochitano,prochitanoDo,prisutstvie',
-        limit: 60,
-      },
+    // Диалогов у сотрудника может быть больше страницы REST (200): читаем всё,
+    // иначе хвост молча пропадает и диалог «не находится».
+    return readAllRows({
+      client: this.client,
+      path: '/rest/chatParticipants',
+      key: 'chatParticipants',
+      filter: `polzovatelId[eq]:"${memberId}"`,
+      select: 'id,chatId,neprochitano,prochitanoDo,prisutstvie',
     });
-
-    return rowsOf(response, 'chatParticipants');
   }
 
   async dialogs(memberId: string): Promise<{
@@ -171,15 +179,15 @@ export class ChatService {
     }
 
     const ids = [...unreadByChat.keys()];
-    const response = await this.client.get<unknown>('/rest/chats', {
-      query: {
-        filter: `id[in]:[${ids.join(',')}]`,
-        select: 'id,name,tip,kanal,vneshniyId,vremyaPoslednego,posledneeSoobshchenie',
-        limit: 60,
-      },
+    const rows = await readAllRows({
+      client: this.client,
+      path: '/rest/chats',
+      key: 'chats',
+      filter: `id[in]:[${ids.join(',')}]`,
+      select: 'id,name,tip,kanal,vneshniyId,vremyaPoslednego,posledneeSoobshchenie',
     });
 
-    const dialogs = rowsOf(response, 'chats')
+    const dialogs = rows
       .map((chat) => ({
         id: String(chat.id ?? ''),
         name: asString(chat.name) ?? 'Без названия',
@@ -317,16 +325,24 @@ export class ChatService {
   async messagesByChat(
     chatId: string,
   ): Promise<{ messages: MessageView[]; names: Record<string, string> }> {
-    const response = await this.client.get<unknown>('/rest/soobshcheniya', {
-      query: {
-        filter: `chatId[eq]:"${chatId}"`,
-        select: 'id,tekst,createdAt,avtorId,chatId,napravlenie,statusDostavki',
-        limit: 60,
-      },
+    // REST в этой установке не сортирует (orderBy игнорируется) и отдаёт первые
+    // страницы, поэтому фиксированный limit обрезал хвост переписки: в длинном
+    // диалоге последние сообщения просто не доезжали до ленты. Читаем всё
+    // страницами и показываем последние LIMIT_RENDER.
+    const all = await readAllRows({
+      client: this.client,
+      path: '/rest/soobshcheniya',
+      key: 'soobshcheniya',
+      filter: `chatId[eq]:"${chatId}"`,
+      select:
+        'id,tekst,createdAt,avtorId,avtorImya,chatId,napravlenie,statusDostavki,vlozhenie,rasshifrovka',
     });
 
     const names = await this.memberNames();
-    const rows = rowsOf(response, 'soobshcheniya').filter((message) => !!message.id);
+    const rows = all
+      .filter((message) => !!message.id)
+      .sort((left, right) => String(left.createdAt ?? '').localeCompare(String(right.createdAt ?? '')))
+      .slice(-LIMIT_RENDER);
     const mentionMap = await this.mentionsByMessage(rows.map((message) => String(message.id)));
     const linkMap = new Map<string, string[]>();
 
@@ -344,11 +360,27 @@ export class ChatService {
           text: asString(message.tekst),
           createdAt: String(message.createdAt ?? ''),
           authorId,
-          authorName: authorId ? names[authorId] ?? 'Сотрудник' : 'Сотрудник',
+          // У внешних каналов (MAX, SMS) сотрудника в CRM нет — подписываем
+          // именем из канала, иначе все сообщения были бы «Сотрудник».
+          authorName: authorId
+            ? names[authorId] ?? 'Сотрудник'
+            : asString(message.avtorImya) || 'Сотрудник',
           mentions: mentionMap.get(id) ?? [],
           napravlenie: asString(message.napravlenie),
           statusDostavki: asString(message.statusDostavki),
           svyazkaIds: linkMap.get(id) ?? [],
+          attachments: (Array.isArray(message.vlozhenie) ? message.vlozhenie : [])
+            .map((item) => {
+              const file = item as { url?: string; label?: string; extension?: string };
+
+              return {
+                url: asString(file.url) ?? '',
+                label: asString(file.label) ?? 'вложение',
+                extension: asString(file.extension) ?? '',
+              };
+            })
+            .filter((file) => file.url.length > 0),
+          transcription: asString(message.rasshifrovka) ?? '',
         };
       })
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
@@ -609,6 +641,7 @@ export class ChatService {
         }
 
         setOpenTarget(memberId, chatId);
+        await this.saveOpenTarget(memberId, chatId);
 
         await fetch(`${apiBase}/api/notify`, {
           method: 'POST',
@@ -639,15 +672,26 @@ export class ChatService {
       return map;
     }
 
-    const response = await this.client.get<unknown>('/rest/upominaniya', {
-      query: {
-        filter: `soobshchenieId[in]:[${messageIds.join(',')}]`,
-        select: 'id,name,soobshchenieId,tipObekta,zapisId',
-        limit: 200,
-      },
-    });
+    // Список сообщений бывает в сотни записей: в одном фильтре адрес запроса
+    // перерастает лимит nginx (414 Request-URI Too Large). Поэтому пачками.
+    const CHUNK = 40;
+    const rows: Record<string, unknown>[] = [];
 
-    for (const row of rowsOf(response, 'upominaniya')) {
+    for (let start = 0; start < messageIds.length; start += CHUNK) {
+      const portion = messageIds.slice(start, start + CHUNK);
+
+      const response = await this.client.get<unknown>('/rest/upominaniya', {
+        query: {
+          filter: `soobshchenieId[in]:[${portion.join(',')}]`,
+          select: 'id,name,soobshchenieId,tipObekta,zapisId',
+          limit: 200,
+        },
+      });
+
+      rows.push(...(rowsOf(response, 'upominaniya') as Record<string, unknown>[]));
+    }
+
+    for (const row of rows) {
       const messageId = asString(row.soobshchenieId);
 
       if (!messageId) {
@@ -840,6 +884,37 @@ export class ChatService {
   }
 
   /**
+   * Запомнить, какой диалог открыть по переходу из уведомления.
+   *
+   * Пишем в участие сотрудника в чате, а не в «Уведомления»: сообщение — это
+   * не уведомление, колокольчик от него пухнуть не должен. Поле служебное.
+   */
+  private async saveOpenTarget(memberId: string, chatId: string): Promise<void> {
+    try {
+      const response = await this.client.get<unknown>('/rest/chatParticipants', {
+        query: {
+          filter: `polzovatelId[eq]:"${memberId}",chatId[eq]:"${chatId}"`,
+          select: 'id',
+          limit: 1,
+        },
+      });
+
+      const row = rowsOf(response, 'chatParticipants')[0];
+
+      if (!row?.id) {
+        return;
+      }
+
+      await this.client.patch<unknown>(`/rest/chatParticipants/${row.id}`, {
+        otkrytChatId: `${chatId}|${Date.now()}`,
+      });
+    } catch (error) {
+      console.error('[open-target] не сохранилось:', error instanceof Error ? error.message : String(error));
+      // подсказка не критична: без неё просто откроется обычный вид
+    }
+  }
+
+  /**
    * Диалог, который нужно открыть по переходу из уведомления.
    *
    * Внутри фронт-компонента адрес страницы недоступен (он живёт в блоб-iframe),
@@ -854,43 +929,40 @@ export class ChatService {
       return { chatId: pending };
     }
 
-    const response = await this.client.get<unknown>('/rest/uvedomleniya', {
+    const response = await this.client.get<unknown>('/rest/chatParticipants', {
       query: {
-        filter: `poluchatelId[eq]:"${memberId}"`,
-        select: 'id,linkedObjectName,linkedRecordId,createdAt,prochitano',
-        limit: 10,
+        filter: `polzovatelId[eq]:"${memberId}",otkrytChatId[is]:NOT_NULL`,
+        select: 'id,chatId,otkrytChatId',
+        limit: 5,
       },
     });
 
-    // Важно: колокольчик помечает уведомление прочитанным ДО того, как страница
-    // откроется, поэтому на признак «прочитано» не опираемся — только на свежесть.
-    const rows = rowsOf(response, 'uvedomleniya').sort((left, right) =>
-      String(right.createdAt ?? '').localeCompare(String(left.createdAt ?? '')),
-    );
+    const row = rowsOf(response, 'chatParticipants')[0];
+    const raw = asString(row?.otkrytChatId) ?? '';
+    const [savedChatId, savedAt] = raw.split('|');
 
-    for (const row of rows) {
-      if (asString(row.linkedObjectName) !== 'page') {
-        continue;
-      }
-
-      const recordId = asString(row.linkedRecordId) ?? '';
-      const [, chatId] = recordId.split('|');
-
-      if (!chatId) {
-        continue;
-      }
-
-      const createdAt = Date.parse(String(row.createdAt ?? ''));
-
-      // Старое уведомление не должно перехватывать открытие страницы из меню.
-      if (!Number.isNaN(createdAt) && Date.now() - createdAt > 10 * 60 * 1000) {
-        continue;
-      }
-
-      return { chatId };
+    if (!row?.id || !savedChatId) {
+      return { chatId: null };
     }
 
-    return { chatId: null };
+    // Подсказка живёт две минуты: страница может спросить цель дважды
+    // (повторный рендер), и второй запрос не должен получить пустоту.
+    // Подсказка без метки времени считается свежей: так пишут каналы.
+    const age = savedAt ? Date.now() - Number(savedAt) : 0;
+
+    if (Number.isFinite(age) && savedAt && age > 2 * 60 * 1000) {
+      try {
+        await this.client.patch<unknown>(`/rest/chatParticipants/${row.id}`, {
+          otkrytChatId: null,
+        });
+      } catch {
+        // не смогли погасить — не страшно
+      }
+
+      return { chatId: null };
+    }
+
+    return { chatId: savedChatId };
   }
 
   async markRead(memberId: string, chatId: string, isWatching = false): Promise<void> {
@@ -950,6 +1022,8 @@ export class ChatService {
     const title = await this.chatTitle(chatId);
 
     try {
+      await this.saveOpenTarget(memberId, chatId);
+
       await fetch(`${this.apiBase()}/api/notify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -959,8 +1033,8 @@ export class ChatService {
           text: unread === 1 ? 'Есть новое сообщение' : `Новых сообщений: ${unread}`,
           link: chatLink.link,
           linkLabel: chatLink.linkLabel,
-          persist: false,
           duration: 10000,
+          persist: false,
         }),
       });
     } catch {
