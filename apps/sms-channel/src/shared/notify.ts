@@ -13,11 +13,16 @@ const client = new RestApiClient({ runAs: 'application' });
 /** Страница «Диалоги»: по ссылке из уведомления открывается нужный чат. */
 const CHAT_PAGE_PATH = '/page/30e9b2da-683c-4fce-8a61-5c5102d69f3e';
 
-const apiBase = (): string =>
-  String(
-    (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process
-      ?.env?.TWENTY_API_URL ?? '',
-  ).replace(/\/+$/, '');
+const apiBase = (): string => {
+  const env = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } })
+    .process?.env;
+
+  // TWENTY_API_URL в этой установке не задан, поэтому падаем на SERVER_URL:
+  // без адреса пуш молча не уходил, и интерфейс жил на опросе раз в 20 секунд.
+  const base = String(env?.TWENTY_API_URL || env?.SERVER_URL || 'http://127.0.0.1:3000');
+
+  return base.replace(/\/+$/, '');
+};
 
 const memberUserId = async (memberId: string): Promise<string | null> => {
   if (!memberId) return null;
@@ -29,6 +34,35 @@ const memberUserId = async (memberId: string): Promise<string | null> => {
   const userId = response?.data?.workspaceMember?.userId;
 
   return typeof userId === 'string' && userId.length > 0 ? userId : null;
+};
+
+/**
+ * Запомнить диалог, который открыть по переходу из уведомления.
+ *
+ * Пишем в участие сотрудника в чате, а не в «Уведомления»: обычное сообщение —
+ * не уведомление, и колокольчик от него пухнуть не должен.
+ */
+const saveOpenTarget = async (memberId: string, chatId: string): Promise<void> => {
+  try {
+    const response = (await client.get<unknown>('/rest/chatParticipants', {
+      query: {
+        filter: `polzovatelId[eq]:"${memberId}",chatId[eq]:"${chatId}"`,
+        select: 'id',
+        limit: 1,
+      },
+    })) as { data?: { chatParticipants?: Array<{ id?: string }> } };
+
+    const row = response?.data?.chatParticipants?.[0];
+
+    if (!row?.id) {
+      return;
+    }
+
+    await client.patch<unknown>(`/rest/chatParticipants/${row.id}`, { otkrytChatId: `${chatId}|${Date.now()}` });
+  } catch (error) {
+    console.error('[open-target] не сохранилось:', error instanceof Error ? error.message : String(error));
+    // подсказка не критична: без неё откроется обычный вид страницы
+  }
 };
 
 export type NotifyResult = 'ok' | 'нет базы' | 'нет userId' | 'ошибка';
@@ -65,6 +99,8 @@ export const notifyIncoming = async (params: {
   };
 
   try {
+    await saveOpenTarget(memberId, chatId);
+
     await fetch(`${base}/api/notify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

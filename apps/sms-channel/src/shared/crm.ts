@@ -209,8 +209,9 @@ export const saveIncoming = async (params: {
   text: string;
   receivedAt: string;
   svyazkaId: string;
+  authorName?: string;
 }): Promise<{ created: boolean; id: string }> => {
-  const { chatId, externalId, text, receivedAt, svyazkaId } = params;
+  const { chatId, externalId, text, receivedAt, svyazkaId, authorName } = params;
 
   const existing = rowsOf(
     await client.get<unknown>('/rest/soobshcheniya', {
@@ -228,6 +229,8 @@ export const saveIncoming = async (params: {
     napravlenie: 'VHODYASHCHIE',
     statusDostavki: 'DOSTAVLENO',
     vneshniyId: externalId,
+    // У SMS автор — номер отправителя: подписываем сообщение им.
+    ...(authorName ? { avtorImya: authorName } : {}),
   };
 
   const created = pickCreated(await client.post<unknown>('/rest/soobshcheniya', payload));

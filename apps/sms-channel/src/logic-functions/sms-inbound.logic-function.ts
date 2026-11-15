@@ -120,6 +120,7 @@ const handler = async (event: RoutePayload) => {
       text: incoming.text,
       receivedAt: incoming.receivedAt,
       svyazkaId,
+      authorName: formatPhone(incoming.phone),
     });
 
     messageCreated = saved.created;
