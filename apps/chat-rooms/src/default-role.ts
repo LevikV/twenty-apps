@@ -27,6 +27,11 @@ export default defineApplicationRole({
   permissionFlagUniversalIdentifiers: ['dc6931a9-44bd-5164-a983-3db5db837f54'],
   objectPermissions: [
     {
+      // Идентификатор выдан явно: в 2.37 сервер вывел для этого права
+      // c1c91778-…, а в 2.58 выводит уже другой (cb67ab6d-…). Без явного
+      // значения план получается «удалить старое и создать новое» в одном
+      // проходе, и валидатор прав падает на «already set for the role».
+      universalIdentifier: 'c1c91778-564a-549a-95b0-86afb53788b6',
       objectUniversalIdentifier: '062d14d7-7280-4fae-970f-3e9a8cb88de2',
       canReadObjectRecords: true,
       canUpdateObjectRecords: true,

@@ -7,8 +7,9 @@ import {
 } from 'twenty-sdk/front-component';
 import { RestApiClient } from 'twenty-client-sdk/rest';
 import { IconTrash } from 'twenty-ui/icon';
-import { Button, IconButton, SearchInput } from 'twenty-ui/input';
-import { useTheme } from 'twenty-ui/theme-constants';
+import { IconButton, SearchInput } from 'twenty-ui/components/input';
+import { Button } from 'twenty-ui/primitives/input';
+import { useTheme } from 'twenty-ui/theme';
 
 import { RELATION_CARDS_FRONT_COMPONENT_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
 import { callRoute } from './api';
@@ -622,7 +623,7 @@ const ContactPersons = () => {
         >
           <SearchInput
             value={searchQuery}
-            onChange={setSearchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
             placeholder={
               pickerKind === 'contact' ? 'Имя или телефон' : 'Название компании'
             }
@@ -692,8 +693,8 @@ const ContactPersons = () => {
           {canCreate && !isCreateFormOpen ? (
             <Button
               title={`+ Создать «${createTerm}»`}
-              size="small"
-              variant="secondary"
+              size="sm"
+              variant="outline"
               onClick={() => {
                 setFormFirstName(preset.firstName);
                 setFormLastName(preset.lastName);
@@ -733,8 +734,8 @@ const ContactPersons = () => {
               <div style={{ display: 'flex', gap: theme.spacing['2'] }}>
                 <Button
                   title={isCreating ? 'Создание…' : 'Создать'}
-                  size="small"
-                  variant="primary"
+                  size="sm"
+                  variant="solid"
                   disabled={isCreating}
                   onClick={() => {
                     void handleCreatePerson();
@@ -743,8 +744,8 @@ const ContactPersons = () => {
 
                 <Button
                   title="Отмена"
-                  size="small"
-                  variant="secondary"
+                  size="sm"
+                  variant="outline"
                   disabled={isCreating}
                   onClick={() => setIsCreateFormOpen(false)}
                 />
@@ -762,8 +763,8 @@ const ContactPersons = () => {
 
       <Button
         title="Добавить"
-        size="small"
-        variant="secondary"
+        size="sm"
+        variant="outline"
         disabled={!recordId}
         onClick={(event) => {
           event.stopPropagation();
@@ -817,17 +818,17 @@ const ContactPersons = () => {
         </div>
 
         <IconButton
-          Icon={IconTrash}
-          size="small"
-          variant="secondary"
-          accent="default"
-          ariaLabel="Убрать"
+          size="sm"
+          variant="ghost"
+          aria-label="Убрать"
           disabled={pendingIds.includes(link.id)}
           onClick={(event) => {
             event.stopPropagation();
             void handleRemove(link);
           }}
-        />
+        >
+          <IconTrash />
+        </IconButton>
       </div>
     );
   };

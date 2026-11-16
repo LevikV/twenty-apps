@@ -68,7 +68,9 @@ const CallsAccessSettings = () => {
       const apiBase = (TWENTY_API_URL ?? '').replace(/\/+$/, '');
       const functionsBase = (TWENTY_FUNCTIONS_URL ?? '').replace(/\/+$/, '');
       const token = TWENTY_APP_ACCESS_TOKEN ?? '';
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const headers: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
 
       // Кэш браузера обходим уникальным параметром `_ts`: мост песочницы не передаёт
       // `cache: 'no-store'`, а на 304 отдаёт ответ с пустым телом (тот же дефект,

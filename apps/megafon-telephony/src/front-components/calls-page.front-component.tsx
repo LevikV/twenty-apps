@@ -369,7 +369,9 @@ const CallsPage = () => {
     let isRelevant = true;
 
     const load = async () => {
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const headers: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
       const [meResponse, membersResponse, rulesResponse] = await Promise.all([
         fetch(
           `${apiBase}/rest/workspaceMembers?filter=${encodeURIComponent(`userId[eq]:${userId}`)}&limit=1&select=id,name,userEmail&_ts=${Date.now()}`,
@@ -566,18 +568,20 @@ const CallsPage = () => {
         // по связи порядок игнорирует), поэтому берём только последние события —
         // перебирать все страницы не нужно, даже когда звонков тысячи.
         const collectedEventIds: string[] = [];
+        type JournalEventsPage = {
+          calendarEventParticipants?: {
+            edges: { node: { calendarEventId?: string | null } }[];
+            pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+          };
+        };
+
         const activeEventIds = cursor === null ? [] : eventIdsRef.current;
 
         if (cursor === null) {
           let after: string | null = null;
 
           for (let page = 0; page < MAX_MEMBER_PAGES; page += 1) {
-            const data = await graphqlQuery<{
-              calendarEventParticipants?: {
-                edges: { node: { calendarEventId?: string | null } }[];
-                pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
-              };
-            }>(
+            const data: JournalEventsPage = await graphqlQuery<JournalEventsPage>(
               `query JournalEvents($member: UUID!, $after: String) {
                  calendarEventParticipants(
                    filter: { workspaceMemberId: { eq: $member } }

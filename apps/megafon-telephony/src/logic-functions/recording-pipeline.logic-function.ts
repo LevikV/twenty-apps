@@ -116,12 +116,11 @@ const handlePending = async (
   // Файл кладём в карточку один раз: если он уже там, только расшифровываем.
   if (!recording.audio?.length) {
     const filename = `${task.uid ?? recording.id}.mp3`;
-    const file = await metadata.uploadFile(
-      audio,
+    const file = await metadata.uploadFile({
+      fileBuffer: audio,
       filename,
-      'audio/mpeg',
-      AUDIO_FIELD_UNIVERSAL_IDENTIFIER,
-    );
+      fieldMetadataUniversalIdentifier: AUDIO_FIELD_UNIVERSAL_IDENTIFIER,
+    });
     const value = [{ fileId: file.id, label: filename }];
 
     await rest.patch(`/rest/callRecordings/${recording.id}`, {
