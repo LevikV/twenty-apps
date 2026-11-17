@@ -1,8 +1,8 @@
 import { defineLogicFunction } from 'twenty-sdk/define';
-import { MetadataApiClient } from 'twenty-client-sdk/metadata';
 import { RestApiClient } from 'twenty-client-sdk/rest';
 
 import { RECORDING_PIPELINE_LOGIC_FUNCTION_UNIVERSAL_IDENTIFIER } from 'src/constants/universal-identifiers';
+import { uploadFieldFile } from 'src/shared/crm-upload';
 import {
   buildTranscript,
   fetchRecognition,
@@ -81,7 +81,6 @@ const patchTask = (rest: RestApiClient, taskId: string, data: Record<string, unk
 /** PENDING: достаём файл и отправляем в Яндекс. */
 const handlePending = async (
   rest: RestApiClient,
-  metadata: MetadataApiClient,
   task: QueueTask,
   iam: string,
 ) => {
@@ -116,9 +115,10 @@ const handlePending = async (
   // Файл кладём в карточку один раз: если он уже там, только расшифровываем.
   if (!recording.audio?.length) {
     const filename = `${task.uid ?? recording.id}.mp3`;
-    const file = await metadata.uploadFile({
-      fileBuffer: audio,
+    const file = await uploadFieldFile({
+      bytes: new Uint8Array(audio),
       filename,
+      contentType: 'audio/mpeg',
       fieldMetadataUniversalIdentifier: AUDIO_FIELD_UNIVERSAL_IDENTIFIER,
     });
     const value = [{ fileId: file.id, label: filename }];
@@ -213,7 +213,6 @@ const handleSent = async (
 
 const handler = async () => {
   const rest = new RestApiClient();
-  const metadata = new MetadataApiClient();
   const startedAt = Date.now();
   const report: Record<string, unknown> = { processed: 0, errors: [] as string[] };
 
@@ -225,7 +224,7 @@ const handler = async () => {
 
   for (const task of pending.data?.recordingQueueTasks ?? []) {
     try {
-      await handlePending(rest, metadata, task, iam);
+      await handlePending(rest, task, iam);
       report.processed = (report.processed as number) + 1;
     } catch (error) {
       (report.errors as string[]).push(`PENDING ${task.uid ?? task.id}: ${describeError(error)}`);
